@@ -1,0 +1,12 @@
+{
+  "name": "invoiceflow-infra",
+  "private": true,
+  "description": "Nur für Railway Infrastructure as Code (.railway/railway.ts). Dashboard: frontend/package.json.",
+  "scripts": {
+    "railway:plan": "railway config plan",
+    "railway:apply": "railway config apply"
+  },
+  "devDependencies": {
+    "railway": "3.16.0"
+  }
+}

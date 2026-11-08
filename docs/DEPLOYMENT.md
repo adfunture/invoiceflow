@@ -2,6 +2,24 @@
 
 Region: **EU West (Amsterdam)** – Rechnungs- und E-Mail-Daten bleiben in der EU.
 
+## 0. Empfohlen: Infrastructure as Code
+
+Alle Services, Datenbank, Buckets, Cron-Zeitpläne und Variablen-Verknüpfungen stehen in
+[`.railway/railway.ts`](../.railway/railway.ts). Die Abschnitte 1–9 beschreiben dieselbe Einrichtung
+von Hand und bleiben als Referenz.
+
+```bash
+npm install                      # im Repo-Root, nur das Railway-IaC-Paket
+railway init                     # Projekt "invoiceflow" im Workspace adfunture
+railway link                     # im Repo-Root
+# Project Settings → Standardregion EU West, BEVOR apply die Datenbank anlegt
+npx railway config plan          # zeigt die Änderungen, ändert nichts
+npx railway config apply         # fragt vor dem Anwenden nach
+```
+
+Danach im Dashboard: Postgres-Backups aktivieren, Domain für `web` erzeugen, alle `preserve()`-Variablen
+(Secrets) setzen, ersten Admin per `railway ssh` anlegen (Abschnitt 3).
+
 ## 1. Projekt und Datenbank
 
 1. Neues Railway-Projekt `invoiceflow` anlegen, Region EU.
