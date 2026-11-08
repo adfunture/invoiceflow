@@ -23,7 +23,7 @@ export function ReviewPage() {
       <div className="space-y-5">
         <Card title={`Dokumente (${docs.data?.length ?? "…"})`}>
           <ErrorBox error={docs.error} />
-          {docs.isLoading ? <Spinner /> : <DocumentTable docs={docs.data ?? []} />}
+          {docs.isLoading ? <Spinner /> : <ReviewDocuments docs={docs.data ?? []} />}
         </Card>
         <Card title={`E-Mails (${messages.data?.length ?? "…"})`}>
           <p className="mb-3 text-sm text-slate-600">
@@ -38,6 +38,65 @@ export function ReviewPage() {
           )}
         </Card>
       </div>
+    </>
+  );
+}
+
+interface BulkIgnoreResult {
+  ignored: number[];
+  failed: { document_id: number; error: string }[];
+}
+
+function ReviewDocuments({ docs }: { docs: DocumentItem[] }) {
+  const { canReview } = useApp();
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("Keine Rechnung");
+  // Nur noch vorhandene Dokumente zählen (nach Neuladen können Einträge verschwunden sein).
+  const ids = docs.map((d) => d.id).filter((id) => selected.has(id));
+  const mutation = useMutation({
+    mutationFn: () => post<BulkIgnoreResult>("/api/documents/bulk-ignore", { document_ids: ids, reason }),
+    onSuccess: (result) => {
+      setSelected(new Set(result.failed.map((f) => f.document_id)));
+      if (result.failed.length === 0) setOpen(false);
+      void qc.invalidateQueries({ queryKey: ["documents"] });
+      void qc.invalidateQueries({ queryKey: ["summary"] });
+    },
+  });
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const toggleAll = () => setSelected(ids.length === docs.length ? new Set() : new Set(docs.map((d) => d.id)));
+
+  return (
+    <>
+      {canReview && docs.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-slate-600">{ids.length} ausgewählt</span>
+          <Button disabled={ids.length === 0} onClick={() => { mutation.reset(); setOpen(true); }}>Ignorieren</Button>
+          {ids.length > 0 && <button className="text-slate-500 hover:underline" onClick={() => setSelected(new Set())}>Auswahl aufheben</button>}
+        </div>
+      )}
+      <DocumentTable docs={docs} selection={canReview ? { selected, toggle, toggleAll } : undefined} />
+      <Modal open={open} title={`${ids.length} Dokument(e) ignorieren`} onClose={() => setOpen(false)} footer={<>
+        <Button onClick={() => setOpen(false)}>Abbrechen</Button>
+        <Button variant="primary" disabled={reason.trim().length < 3 || ids.length === 0 || mutation.isPending}
+                onClick={() => mutation.mutate()}>Ignorieren</Button>
+      </>}>
+        <p className="mb-3 text-sm text-slate-600">Ignorierte Dokumente gehen nicht an DATEV. Jede Änderung wird protokolliert.</p>
+        <Field label="Vermerk"><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+        {mutation.data && mutation.data.failed.length > 0 && (
+          <Notice tone="warning">
+            {mutation.data.ignored.length} ignoriert, {mutation.data.failed.length} nicht änderbar:{" "}
+            {mutation.data.failed.map((f) => `#${f.document_id} (${f.error})`).join(", ")}
+          </Notice>
+        )}
+        <ErrorBox error={mutation.error} />
+      </Modal>
     </>
   );
 }

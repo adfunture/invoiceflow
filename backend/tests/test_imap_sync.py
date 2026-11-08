@@ -184,7 +184,8 @@ def test_two_attachments_are_stored_separately_and_encrypted(accounts):
 
 
 def test_mail_without_attachment_but_invoice_link_is_kept(accounts):
-    raw = build_email("Ihre Rechnung ist verfügbar", body="Rechnung herunterladen: https://portal.example.com/invoice/123")
+    raw = build_email("Ihre Rechnung ist verfügbar", body="Rechnung herunterladen: https://portal.example.com/invoice/123",
+                      attachments=[])
     accounts[INFO].deliver(raw, ON_START + timedelta(hours=1))
     sync(accounts)
     msg = messages()[0]

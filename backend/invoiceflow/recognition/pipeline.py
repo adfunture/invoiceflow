@@ -167,6 +167,8 @@ class DocumentProcessor:
                     att.detected_content_type in _EXECUTABLE_TYPES or ext in _BLOCKED_EXTENSIONS
                 ):
                     reasons.append(f"Gefährlicher Anhang „{name}“ blockiert")
+                elif att.safety_status == AttachmentSafety.rejected_type and ext == "zip":
+                    reasons.append(f"Anhang „{name}“: {att.rejection_reason}")
             review_docs = [d for d in docs if d.status == DocumentStatus.manual_review]
             if review_docs:
                 reasons.append(f"{len(review_docs)} Dokument(e) zur Prüfung")

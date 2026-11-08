@@ -396,6 +396,21 @@ class ReviewIn(StrictInput):
     corrections: dict[str, Any] | None = None
 
 
+class BulkIgnoreIn(StrictInput):
+    document_ids: list[int] = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class BulkFailureOut(BaseModel):
+    document_id: int
+    error: str
+
+
+class BulkIgnoreOut(BaseModel):
+    ignored: list[int]
+    failed: list[BulkFailureOut]
+
+
 # --- DATEV-Übertragungen --------------------------------------------------------
 
 

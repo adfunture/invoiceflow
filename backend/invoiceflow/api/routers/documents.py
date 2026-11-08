@@ -9,7 +9,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from invoiceflow.api.deps import AuthContext, ensure_company, get_db, require_reviewer, require_viewer
-from invoiceflow.api.schemas import DocumentDetailOut, DocumentOut, DuplicateOut, InvoiceMetadataOut, ReviewIn
+from invoiceflow.api.schemas import (
+    BulkFailureOut,
+    BulkIgnoreIn,
+    BulkIgnoreOut,
+    DocumentDetailOut,
+    DocumentOut,
+    DuplicateOut,
+    InvoiceMetadataOut,
+    ReviewIn,
+)
 from invoiceflow.db.enums import DocumentStatus, DocumentType
 from invoiceflow.db.models import Document, EmailMessage, InvoiceDuplicate, InvoiceMetadata, Mailbox
 from invoiceflow.services import review as review_svc
@@ -73,6 +82,24 @@ def _load(db: Session, auth: AuthContext, doc_id: int) -> Document:
     if doc is None or not auth.can_access(doc.company_id):
         raise HTTPException(404, "Nicht gefunden")
     return doc
+
+
+@router.post("/bulk-ignore", response_model=BulkIgnoreOut)
+def bulk_ignore(body: BulkIgnoreIn, auth: AuthContext = Depends(require_reviewer), db: Session = Depends(get_db)) -> BulkIgnoreOut:
+    """Mehrere Dokumente auf „ignoriert“ setzen. Jedes einzeln geprüft und protokolliert;
+    nicht änderbare (z. B. bereits freigegebene) werden übersprungen und gemeldet."""
+    ignored: list[int] = []
+    failed: list[BulkFailureOut] = []
+    for doc_id in dict.fromkeys(body.document_ids):
+        try:
+            with db.begin_nested():
+                review_svc.review_document(db, doc_id, auth.actor, decision="ignore", reason=body.reason,
+                                           allowed_company_ids=auth.company_ids)
+            ignored.append(doc_id)
+        except review_svc.ReviewError as exc:
+            failed.append(BulkFailureOut(document_id=doc_id, error=str(exc)))
+    db.commit()
+    return BulkIgnoreOut(ignored=ignored, failed=failed)
 
 
 @router.get("/{doc_id}", response_model=DocumentDetailOut)

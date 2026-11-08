@@ -114,6 +114,42 @@ def test_inline_logo_is_skipped():
     assert [a.safety for a in msg.attachments] == [AttachmentSafety.inline_skipped]
 
 
+def test_outlook_signature_images_with_filename_are_skipped():
+    m = EmailMessage()
+    m["From"] = "a@b.example"
+    m["To"] = "sascha.senninger@sbc-symbio.de"
+    m["Subject"] = "New Offer"
+    m.set_content("text")
+    m.add_alternative('<p>Gruß <img src="cid:image001.png@01DB"></p>', subtype="html")
+    html = m.get_payload()[1]
+    html.add_related(b"\xff\xd8\xff" + b"0" * 50, maintype="image", subtype="jpeg", cid="<image001.png@01DB>",
+                     filename="image001.jpg")
+    # Nicht im HTML referenziert, aber Outlook-typisch benannt und mit Content-ID.
+    html.add_related(b"\x89PNG\r\n\x1a\n...", maintype="image", subtype="png", cid="<x@y>", filename="image014.png")
+    msg = parse(m.as_bytes())
+    assert [a.safety for a in msg.attachments] == [AttachmentSafety.inline_skipped] * 2
+    assert not msg.needs_processing
+
+
+def test_photo_attachment_is_kept():
+    msg = parse(build_email(attachments=[("beleg-tankstelle.jpg", b"\xff\xd8\xff" + b"0" * 50, "image/jpeg")]))
+    assert msg.attachments[0].safety == AttachmentSafety.ok and msg.needs_processing
+
+
+def test_office_files_are_not_invoices_but_zip_is_flagged():
+    xlsx = b"PK\x03\x04" + b"0" * 50
+    msg = parse(build_email(attachments=[("New Offer Puma.xlsx", xlsx, "application/vnd.ms-excel")]))
+    assert msg.attachments[0].safety == AttachmentSafety.rejected_type
+    assert "Office-Datei" in msg.attachments[0].rejection_reason
+    assert not msg.needs_processing
+    msg = parse(build_email(attachments=[("rechnungen.zip", xlsx, "application/zip")]))
+    assert msg.attachments[0].safety == AttachmentSafety.rejected_type and msg.needs_processing
+
+
+def test_mail_without_attachment_or_link_needs_no_processing():
+    assert not parse(build_email(body="Rechnung folgt nächste Woche.", attachments=[])).needs_processing
+
+
 def test_invoice_links_detected_but_not_fetched():
     html = '<p>Ihre Rechnung: <a href="https://billing.example.com/download?id=9">Download</a> ' \
            '<a href="https://example.com/impressum">Impressum</a></p>'

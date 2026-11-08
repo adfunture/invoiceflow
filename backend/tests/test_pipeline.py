@@ -292,10 +292,13 @@ def test_mail_without_attachment_but_link_goes_to_review(accounts):
     assert msg.status == EmailMessageStatus.manual_review and "nicht automatisch abgerufen" in msg.review_reason
 
 
-def test_plain_mail_is_no_invoice(accounts):
+def test_plain_mail_is_not_imported(accounts):
     deliver(accounts, [], subject="Termin", body="Treffen am Dienstag?")
+    deliver(accounts, [("Preisliste.xlsx", b"PK\x03\x04" + b"0" * 50, "application/vnd.ms-excel"),
+                       ("termin.ics", b"BEGIN:VCALENDAR", "text/calendar")],
+            subject="New Offer", body="Unsere Angebote")
     process(accounts)
-    assert messages()[0].status == EmailMessageStatus.no_invoice
+    assert messages() == [] and documents() == []
 
 
 # --- Scan / OCR / KI --------------------------------------------------------------

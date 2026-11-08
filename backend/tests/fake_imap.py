@@ -37,7 +37,9 @@ def build_email(
     msg["Date"] = format_datetime(date_header or datetime(2026, 11, 9, 9, 0, tzinfo=UTC))
     msg["Message-ID"] = message_id or f"<{abs(hash((subject, body)))}@lieferant.example>"
     msg.set_content(body)
-    for filename, data, mime in attachments or []:
+    if attachments is None:  # Mails ohne Anhang und Link werden nicht importiert; Standard ist eine Rechnung.
+        attachments = [("rechnung.pdf", pdf(f"{subject}|{body}"), "application/pdf")]
+    for filename, data, mime in attachments:
         maintype, subtype = mime.split("/")
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
     return msg.as_bytes()

@@ -58,6 +58,7 @@ class FolderResult:
     imported: int = 0
     already_known: int = 0
     before_start: int = 0
+    irrelevant: int = 0  # ohne Anhang und ohne Rechnungslink, nicht importiert
     uidvalidity_changed: bool = False
 
 
@@ -321,6 +322,8 @@ class MailboxSyncer:
                     result.imported += 1
                 elif outcome == "before_start":
                     result.before_start += 1
+                elif outcome == "irrelevant":
+                    result.irrelevant += 1
                 else:
                     result.already_known += 1
 
@@ -375,6 +378,14 @@ class MailboxSyncer:
                           review_reason=f"Nachricht größer als {max_message // (1024 * 1024)} MB – nicht heruntergeladen")
         else:
             raw = server.fetch_raw(meta.uid)
+            try:
+                parsed = parse_message(raw, max_attachment_bytes=max_attachment)
+            except Exception as exc:  # noqa: BLE001 – kaputte Nachricht: Original bleibt gespeichert, Prüfung manuell
+                values.update(status=EmailMessageStatus.error, review_reason=f"MIME nicht lesbar: {type(exc).__name__}")
+            if parsed is not None and not parsed.needs_processing:
+                # Weder Anhang noch Rechnungslink: keine Rechnungspost, wird weder gespeichert noch angezeigt.
+                self._advance(state_id, meta.uid)
+                return "irrelevant"
             raw_obj = self.store.put(company_slug, "raw_email", raw, "eml")
             with self.sessions() as db:
                 same_raw = db.scalar(select(EmailMessage.id).where(
@@ -383,10 +394,6 @@ class MailboxSyncer:
                 self._advance(state_id, meta.uid)
                 return "known"
             values.update(raw_sha256=raw_obj.sha256, raw_storage_key=raw_obj.key, size_bytes=len(raw))
-            try:
-                parsed = parse_message(raw, max_attachment_bytes=max_attachment)
-            except Exception as exc:  # noqa: BLE001 – kaputte Nachricht: Original bleibt gespeichert, Prüfung manuell
-                values.update(status=EmailMessageStatus.error, review_reason=f"MIME nicht lesbar: {type(exc).__name__}")
             if parsed is not None:
                 for att in parsed.attachments:
                     row = dict(

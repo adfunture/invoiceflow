@@ -38,11 +38,16 @@ _SIGNATURES: list[tuple[bytes, str]] = [
     (b"\x7fELF", "application/x-executable"),
     (b"\xd0\xcf\x11\xe0", "application/x-ole-storage"),  # altes Office, oft Makros
 ]
-_ALLOWED_TYPES = {"application/pdf", "application/xml", "image/png", "image/jpeg", "image/tiff", "application/zip"}
+_ALLOWED_TYPES = {"application/pdf", "application/xml", "image/png", "image/jpeg", "image/tiff"}
 _BLOCKED_EXTENSIONS = {
     "exe", "com", "bat", "cmd", "scr", "pif", "js", "jse", "vbs", "vbe", "wsf", "ps1", "msi", "dll", "jar",
     "lnk", "hta", "iso", "img", "docm", "xlsm", "pptm", "html", "htm", "svg",
 }
+EXECUTABLE_TYPES = {"application/x-msdownload", "application/x-executable", "application/x-ole-storage"}
+# Office-Dateien sind technisch ZIP-Archive (Angebotslisten, Preislisten …), aber nie ein Rechnungsformat.
+_OFFICE_EXTENSIONS = {"xlsx", "docx", "pptx", "ods", "odt", "odp"}
+# Outlook benennt eingebettete Bilder (Signatur, Logo, eingefügte Screenshots) image001.png usw.
+_OUTLOOK_EMBEDDED = re.compile(r"^image\d{3}\.(png|jpe?g|gif)$", re.I)
 _INVOICE_WORDS = re.compile(
     r"\b(rechnung|rechnungs-?nr|invoice|gutschrift|credit\s*note|storno|faktura|zahlungsbeleg|beleg)\w*", re.I
 )
@@ -69,6 +74,16 @@ class ParsedAttachment:
             return self.filename.rsplit(".", 1)[1].lower()
         return {"application/pdf": "pdf", "application/xml": "xml"}.get(self.detected_content_type or "", "bin")
 
+    @property
+    def needs_processing(self) -> bool:
+        """Verwertbar oder prüfwürdig (kaputt, zu groß, gefährlich, ZIP) – sonst ohne Belang."""
+        if self.safety in (AttachmentSafety.ok, AttachmentSafety.corrupt, AttachmentSafety.rejected_size):
+            return True
+        if self.safety == AttachmentSafety.rejected_type:
+            ext = self.filename.rsplit(".", 1)[1].lower() if self.filename and "." in self.filename else ""
+            return self.detected_content_type in EXECUTABLE_TYPES or ext in _BLOCKED_EXTENSIONS or ext == "zip"
+        return False
+
 
 @dataclass
 class ParsedMessage:
@@ -84,6 +99,11 @@ class ParsedMessage:
     parse_warnings: list[str] = field(default_factory=list)
 
     @property
+    def needs_processing(self) -> bool:
+        """Nur Mails mit Anhang oder Rechnungslink werden importiert; alles andere ist keine Rechnungspost."""
+        return bool(self.invoice_links) or any(a.needs_processing for a in self.attachments)
+
+    @property
     def body_preview(self) -> str | None:
         text = re.sub(r"\s+", " ", self.text_body).strip()
         return text[:MAX_PREVIEW_CHARS] or None
@@ -94,6 +114,7 @@ class _HtmlText(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.hrefs: list[str] = []
+        self.cids: set[str] = set()
         self._skip = 0
 
     def handle_starttag(self, tag, attrs):
@@ -103,6 +124,10 @@ class _HtmlText(HTMLParser):
             href = dict(attrs).get("href")
             if href:
                 self.hrefs.append(href)
+        if tag == "img":
+            src = (dict(attrs).get("src") or "").strip()
+            if src.lower().startswith("cid:"):
+                self.cids.add(src[4:].strip("<>").lower())
         if tag in ("br", "p", "div", "tr", "li"):
             self.parts.append("\n")
 
@@ -143,8 +168,12 @@ def classify_attachment(filename: str | None, data: bytes, max_bytes: int) -> tu
     ext = filename.rsplit(".", 1)[1].lower() if filename and "." in filename else ""
     if ext in _BLOCKED_EXTENSIONS:
         return AttachmentSafety.rejected_type, detected, f"Dateityp .{ext} wird nicht verarbeitet"
-    if detected in {"application/x-msdownload", "application/x-executable", "application/x-ole-storage"}:
+    if detected in EXECUTABLE_TYPES:
         return AttachmentSafety.rejected_type, detected, f"Inhalt ist {detected}"
+    if detected == "application/zip":
+        if ext in _OFFICE_EXTENSIONS:
+            return AttachmentSafety.rejected_type, detected, f"Office-Datei (.{ext}) ist kein Rechnungsformat"
+        return AttachmentSafety.rejected_type, detected, "ZIP-Archiv wird nicht entpackt – bitte manuell prüfen"
     if detected is None:
         if ext in {"pdf", "xml"}:
             return AttachmentSafety.corrupt, None, f"Endung .{ext}, aber Inhalt passt nicht"
@@ -240,6 +269,7 @@ def parse_message(raw: bytes, *, max_attachment_bytes: int) -> ParsedMessage:
     text_chunks: list[str] = []
     urls: list[str] = []
     attachments: list[ParsedAttachment] = []
+    referenced_cids: set[str] = set()
 
     for index, part in enumerate(_leaves(msg, warnings), start=1):
         content_type = part.get_content_type()
@@ -261,6 +291,7 @@ def parse_message(raw: bytes, *, max_attachment_bytes: int) -> ParsedMessage:
                 except Exception:  # noqa: BLE001
                     warnings.append("InvalidHtml")
                 urls += parser.hrefs
+                referenced_cids |= parser.cids
                 text = "".join(parser.parts)
             text_chunks.append(text)
             urls += _URL_RE.findall(text)
@@ -286,6 +317,15 @@ def parse_message(raw: bytes, *, max_attachment_bytes: int) -> ParsedMessage:
             index, filename, content_type, detected, data if safety == AttachmentSafety.ok else None, len(data),
             is_inline, content_id, safety, reason,
         ))
+
+    # Im HTML eingebettete Bilder (Signatur, Logo) haben oft einen Dateinamen. Erst nach dem
+    # Durchlauf erkennbar, weil der HTML-Teil nicht immer vor den Bildern steht.
+    for att in attachments:
+        cid = (att.content_id or "").strip().strip("<>").lower()
+        if (att.declared_content_type or "").startswith("image/") and cid and (
+            cid in referenced_cids or (att.filename and _OUTLOOK_EMBEDDED.match(att.filename))
+        ):
+            att.safety, att.data, att.rejection_reason = AttachmentSafety.inline_skipped, None, None
 
     full_text = "\n".join(text_chunks)
     subject = _decode_header(msg, "Subject")

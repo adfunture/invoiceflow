@@ -90,6 +90,21 @@ def test_review_ignore_and_mark_duplicate(admin, accounts):
     assert admin.post(f"/api/documents/{docs[0][0].id}/review", json={"decision": "ignore", "reason": "abc"}).status_code == 409
 
 
+def test_bulk_ignore_skips_released_and_foreign(admin, accounts):
+    docs = _setup(accounts, ("a.pdf", make_pdf(invoice_lines("RE-1")), PDF),
+                  ("b.pdf", make_pdf(["Lieferant GmbH", "Rechnung"]), PDF),
+                  ("c.pdf", make_pdf(["Anderer GmbH", "Rechnung", "Rechnungsnummer: X-2"]), PDF))
+    released, held1, held2 = (d for d, _ in docs)
+    assert released.status == "ready_for_datev" and held1.status == held2.status == "manual_review"
+    body = admin.post("/api/documents/bulk-ignore", json={
+        "document_ids": [held1.id, held2.id, released.id, 999_999], "reason": "Keine Rechnung"}).json()
+    assert body["ignored"] == [held1.id, held2.id]
+    assert {f["document_id"] for f in body["failed"]} == {released.id, 999_999}
+    assert admin.get("/api/documents", params={"status": "ignored"}).json().__len__() == 2
+    logs = admin.get("/api/audit-logs", params={"entity_type": "document"}).json()
+    assert [entry["action"] for entry in logs].count("document.review.ignore") == 2
+
+
 def test_review_permissions_and_isolation(accounts):
     (doc, _), = _setup(accounts, ("r.pdf", make_pdf(["Lieferant GmbH", "Rechnung"]), PDF))
     make_user("viewer@adfunture.de", UserRole.viewer, ("adfunture",))
@@ -103,4 +118,7 @@ def test_review_permissions_and_isolation(accounts):
     assert sbc.get(f"/api/documents/{doc.id}").status_code == 404
     assert sbc.get(f"/api/documents/{doc.id}/original").status_code == 404
     assert sbc.post(f"/api/documents/{doc.id}/review", json={"decision": "ignore", "reason": "abc"}).status_code == 404
+    bulk = sbc.post("/api/documents/bulk-ignore", json={"document_ids": [doc.id], "reason": "abc"}).json()
+    assert bulk["ignored"] == [] and bulk["failed"][0]["error"] == "Nicht gefunden"
+    assert viewer.post("/api/documents/bulk-ignore", json={"document_ids": [doc.id], "reason": "abc"}).status_code == 403
     assert sbc.get("/api/documents", params={"company_id": company_id("adfunture")}).status_code == 404
