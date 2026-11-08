@@ -80,3 +80,16 @@ def test_logs_redact_credentials():
     assert redact_value("details", {"smtp_password": "x", "host": "smtp.strato.de"}) == {
         "smtp_password": "***", "host": "smtp.strato.de"
     }
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ('["a.example.de", "b.example.de"]', ["a.example.de", "b.example.de"]),
+    ("a.example.de, b.example.de", ["a.example.de", "b.example.de"]),
+    ("[web-production-21eb5.up.railway.app]", ["web-production-21eb5.up.railway.app"]),
+    ("a.example.de", ["a.example.de"]),
+])
+def test_list_settings_accept_json_and_comma_separated(monkeypatch, raw, expected):
+    monkeypatch.setenv("ALLOWED_HOSTS", raw)
+    monkeypatch.setenv("ALERT_EMAIL_TO", raw)
+    s = Settings(app_env=AppEnv.test)
+    assert s.allowed_hosts == expected and s.alert_email_to == expected

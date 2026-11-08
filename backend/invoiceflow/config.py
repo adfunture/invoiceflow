@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from enum import StrEnum
+import json
 from functools import lru_cache
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Nur Umgebungsvariablen mit diesem Präfix dürfen als Zugangsdaten-Referenz
 # (mailboxes.credential_ref, datev_destinations.smtp_credential_ref) aufgelöst
@@ -84,7 +86,7 @@ class Settings(BaseSettings):
 
     # Alarme (Überwachung). Mindestens ein Kanal sollte in Produktion konfiguriert sein.
     public_base_url: str | None = None  # für Links in Alarmen, z. B. https://invoiceflow.example.de
-    alert_email_to: list[str] = Field(default_factory=list)
+    alert_email_to: Annotated[list[str], NoDecode] = Field(default_factory=list)
     alert_email_from: str | None = None
     alert_smtp_host: str | None = None
     alert_smtp_port: int = 465
@@ -105,7 +107,7 @@ class Settings(BaseSettings):
     backup_keep_days: int = 35
 
     # Hosts, unter denen das Dashboard erreichbar ist (Host-Header-Prüfung).
-    allowed_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     @field_validator("database_url")
     @classmethod
@@ -115,6 +117,20 @@ class Settings(BaseSettings):
             if value.startswith(prefix):
                 return "postgresql+psycopg://" + value[len(prefix):]
         return value
+
+    @field_validator("allowed_hosts", "alert_email_to", mode="before")
+    @classmethod
+    def _parse_list(cls, value: object) -> object:
+        """Akzeptiert JSON (["a","b"]) oder kommagetrennt (a, b) – robuster beim Eintragen im Dashboard."""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                text = text.strip("[]")  # z. B. [host] ohne Anführungszeichen
+        return [part.strip().strip("'\"") for part in text.split(",") if part.strip().strip("'\"")]
 
     @field_validator("import_timezone")
     @classmethod
