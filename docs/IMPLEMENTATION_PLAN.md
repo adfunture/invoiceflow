@@ -21,6 +21,10 @@ Stand: 08.11.2026. Jede Phase endet mit grünen Tests, bevor die nächste beginn
 - Backfill per `SEARCH SINCE` (1 Tag Puffer) + exakter Filter auf
   INTERNALDATE ≥ 08.11.2026 00:00 Europe/Berlin; danach inkrementell per UID
 - UIDVALIDITY-Wechsel → Neuscan; Duplikate über Rohdaten-Hash ausgeschlossen
+- **Alle Ordner und Unterordner** werden automatisch erkannt (IMAP LIST mit SPECIAL-USE-Flags); Gesendet,
+  Entwürfe, Papierkorb, Spam (und deren Unterordner) standardmäßig ausgeschlossen; Admin-Entscheidung je
+  Ordner bleibt erhalten; verschobene Mails werden nicht doppelt importiert; verschwundene Ordner werden gemeldet
+- Schutz gegen eigene Ausgangsrechnungen: eigene USt-ID als Rechnungssteller → manuelle Prüfung
 - Fortschritt (`last_seen_uid`) in derselben Transaktion wie die Nachricht → exakter Wiederanlauf
 - Postfach-Lease gegen parallelen Abruf, Worker-Heartbeats, sauberes SIGTERM-Verhalten
 - Speicher: AES-256-GCM, inhaltsadressiert, nie überschreiben, lokal oder S3

@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime
 from email.message import EmailMessage
 from email.utils import format_datetime
 
-from invoiceflow.mail.imap import ConnectionParams, FolderInfo, MailServerError, MessageMeta
+from invoiceflow.mail.imap import ConnectionParams, FolderInfo, FolderListing, MailServerError, MessageMeta
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 
@@ -54,6 +54,7 @@ class FakeFolder:
 class FakeAccount:
     password: str = "richtig"
     folders: dict[str, FakeFolder] = field(default_factory=lambda: {"INBOX": FakeFolder()})
+    folder_flags: dict[str, set[str]] = field(default_factory=dict)  # z. B. {"Gesendet": {"\Sent"}}
     fail_connects: int = 0  # so viele Verbindungsversuche schlagen fehl
     fail_fetch_uids: set[int] = field(default_factory=set)
     connects: int = 0
@@ -65,6 +66,11 @@ class FakeAccount:
         f.messages[uid] = (internaldate, raw)
         f.next_uid += 1
         return uid
+
+    def move(self, uid: int, source: str, target: str) -> int:
+        """Wie ein Mailprogramm: Nachricht verschieben = neue UID im Zielordner."""
+        internaldate, raw = self.folders[source].messages.pop(uid)
+        return self.deliver(raw, internaldate, target)
 
     def renumber(self, folder: str = "INBOX", new_uidvalidity: int = 2000) -> None:
         """Simuliert UIDVALIDITY-Wechsel (z. B. Server-Migration): alle UIDs neu."""
@@ -87,8 +93,9 @@ class FakeMailServer:
         self.selected: FakeFolder | None = None
         self.closed = False
 
-    def list_folders(self) -> list[str]:
-        return list(self.account.folders)
+    def list_folders(self) -> list[FolderListing]:
+        return [FolderListing(name, frozenset(self.account.folder_flags.get(name, set())), "/")
+                for name in self.account.folders]
 
     def select_folder(self, name: str) -> FolderInfo:
         if name not in self.account.folders:

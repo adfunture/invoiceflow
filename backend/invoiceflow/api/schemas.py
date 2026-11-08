@@ -91,6 +91,9 @@ class FolderOut(Output):
     backfill_completed_at: datetime | None
     last_synced_at: datetime | None
     last_error: str | None
+    exclusion_reason: str | None = None
+    discovered_at: datetime | None = None
+    missing_since: datetime | None = None
 
 
 class ConnectionTestOut(BaseModel):

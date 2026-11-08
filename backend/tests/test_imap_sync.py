@@ -287,8 +287,10 @@ def test_missing_folder_does_not_block_other_folders(accounts):
         s.add(MailboxSyncState(company_id=mb.company_id, mailbox_id=mb.id, folder_name="Gibt-es-nicht"))
         s.commit()
     result = sync(accounts)
-    assert result.status == "failed" and "Gibt-es-nicht" in result.error
-    assert result.imported == 1
+    assert result.status == "ok" and result.imported == 1
+    with get_sessionmaker()() as s:
+        missing = s.scalar(select(MailboxSyncState).where(MailboxSyncState.folder_name == "Gibt-es-nicht"))
+    assert missing.missing_since is not None, "auf dem Server verschwundener Ordner wird markiert, nicht abgefragt"
 
 
 def test_additional_folder_is_synced(accounts):

@@ -221,6 +221,11 @@ class MailboxSyncState(Base):
     uidvalidity: Mapped[int | None] = mapped_column(BigInteger)
     last_seen_uid: Mapped[int | None] = mapped_column(BigInteger)
     backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Automatische Ordnererkennung: Grund für Ausschluss (Gesendet, Papierkorb, Spam …), Fundzeitpunkt,
+    # und seit wann der Ordner auf dem Server fehlt. is_enabled wird nach dem Anlegen nie automatisch geändert.
+    exclusion_reason: Mapped[str | None] = mapped_column(Text)
+    discovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at_col()

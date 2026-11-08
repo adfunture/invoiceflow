@@ -33,6 +33,7 @@ from invoiceflow.db.models import (
     DatevTransmission,
     Document,
     Mailbox,
+    MailboxSyncState,
     ProcessingJob,
     WorkerHeartbeat,
 )
@@ -86,6 +87,14 @@ def collect_findings(db: Session, settings: Settings, now: datetime | None = Non
         elif mb.last_successful_sync_at and mb.last_successful_sync_at < now - timedelta(hours=1):
             findings.append(Finding(f"mailbox:{mb.id}:stale", "warning",
                                     f"Postfach {mb.email_address}: seit über 1 Stunde kein erfolgreicher Abruf"))
+
+    missing = db.execute(select(Mailbox.email_address, MailboxSyncState.folder_name)
+                         .join(MailboxSyncState, MailboxSyncState.mailbox_id == Mailbox.id)
+                         .where(Mailbox.is_active.is_(True), MailboxSyncState.is_enabled.is_(True),
+                                MailboxSyncState.missing_since < now - timedelta(hours=1))).all()
+    if missing:
+        names = ", ".join(f"{mb}: {folder}" for mb, folder in missing[:10])
+        findings.append(Finding("folders:missing", "warning", f"Überwachte Ordner existieren nicht mehr auf dem Server ({names})"))
 
     # Verarbeitung
     dead = _count(db, ProcessingJob, ProcessingJob.status == JobStatus.dead)

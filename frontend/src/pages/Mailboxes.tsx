@@ -14,7 +14,7 @@ export function MailboxesPage() {
   });
   return (
     <>
-      <PageHeader title="Postfächer" subtitle="Abruf alle 5 Minuten · nur lesend · ab 08.11.2026" />
+      <PageHeader title="Postfächer" subtitle="Abruf alle 5 Minuten · alle Ordner inkl. Unterordner · nur lesend · ab 08.11.2026" />
       <ErrorBox error={list.error} />
       {list.isLoading ? <Spinner /> : (
         <div className="grid gap-4 lg:grid-cols-2">
@@ -57,8 +57,10 @@ function MailboxCard({ m }: { m: Mailbox }) {
         ["Zugangsdaten", <span>{m.credential_ref} {m.credential_configured ? <Badge tone="success">gesetzt</Badge> : <Badge tone="warning">fehlt</Badge>}</span>],
         ["Domain", m.domain_verified_at ? `${domain} bestätigt` : <span className="text-amber-700">{domain} nicht bestätigt</span>],
         ["Letzter Abruf", fmtDateTime(m.last_successful_sync_at)],
-        ["Ordner", m.folders.map((f) => `${f.folder_name}${f.is_enabled ? "" : " (aus)"}`).join(", ")],
+        ["Ordner", `${m.folders.filter((f) => f.is_enabled && !f.missing_since).length} überwacht, `
+          + `${m.folders.filter((f) => !f.is_enabled).length} ausgeschlossen`],
       ]} />
+      <FolderList m={m} editable={isAdmin} onChanged={refresh} />
       {m.last_error && <div className="mt-3"><Notice tone="danger">{fmtDateTime(m.last_error_at)}: {m.last_error}</Notice></div>}
       {m.activation_blockers.length > 0 && (
         <div className="mt-3"><Notice tone="warning">
@@ -85,6 +87,44 @@ function MailboxCard({ m }: { m: Mailbox }) {
       {edit && <EditMailbox m={m} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); refresh(); }} />}
       {verify && <VerifyDomain m={m} domain={domain} onClose={() => setVerify(false)} onSaved={() => { setVerify(false); refresh(); }} />}
     </Card>
+  );
+}
+
+function FolderList({ m, editable, onChanged }: { m: Mailbox; editable: boolean; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const toggle = useMutation({
+    mutationFn: (f: { folder_name: string; enabled: boolean }) => post(`/api/mailboxes/${m.id}/folders`, f),
+    onSuccess: onChanged,
+  });
+  const sorted = [...m.folders].sort((a, b) => a.folder_name.localeCompare(b.folder_name, "de"));
+  return (
+    <div className="mt-3">
+      <button type="button" className="text-sm text-brand-700 hover:underline" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? "Ordner ausblenden" : `Alle ${m.folders.length} Ordner anzeigen`}
+      </button>
+      {open && (
+        <ul className="mt-2 divide-y divide-slate-100 rounded-md border border-slate-200 text-sm">
+          {sorted.map((f) => (
+            <li key={f.id} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
+              <span className="min-w-0 flex-1 break-all font-mono text-xs">{f.folder_name}</span>
+              {f.missing_since ? <Badge tone="danger">fehlt auf dem Server</Badge>
+                : f.is_enabled ? <Badge tone="success">überwacht</Badge>
+                : <Badge tone="neutral">ausgeschlossen</Badge>}
+              {f.exclusion_reason && <span className="w-full text-xs text-slate-500">{f.exclusion_reason}</span>}
+              {f.last_error && <span className="w-full text-xs text-rose-700">{f.last_error}</span>}
+              {editable && !f.missing_since && (
+                <Button variant="ghost" disabled={toggle.isPending} onClick={() => {
+                  if (!f.is_enabled && f.exclusion_reason
+                    && !window.confirm(`„${f.folder_name}“ wurde automatisch ausgeschlossen: ${f.exclusion_reason}. Trotzdem überwachen?`)) return;
+                  toggle.mutate({ folder_name: f.folder_name, enabled: !f.is_enabled });
+                }}>{f.is_enabled ? "Ausschließen" : "Überwachen"}</Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <ErrorBox error={toggle.error} />
+    </div>
   );
 }
 
@@ -125,7 +165,9 @@ function EditMailbox({ m, onClose, onSaved }: { m: Mailbox; onClose: () => void;
       <Field label="Zugangsdaten-Variable" hint="Name der Railway-Variable, z. B. INVOICEFLOW_SECRET_IMAP_…">
         <Input value={form.credential_ref} onChange={set("credential_ref")} />
       </Field>
-      <Field label="Weiteren Ordner überwachen (optional)"><Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="z. B. Rechnungen" /></Field>
+      <Field label="Ordner manuell hinzufügen (optional)" hint="Normalerweise nicht nötig: Alle Ordner werden bei jedem Abruf automatisch erkannt.">
+        <Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="z. B. Rechnungen" />
+      </Field>
       <ErrorBox error={save.error} />
     </Modal>
   );

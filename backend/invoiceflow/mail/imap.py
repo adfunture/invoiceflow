@@ -29,6 +29,17 @@ class FolderInfo:
 
 
 @dataclass(frozen=True)
+class FolderListing:
+    name: str
+    flags: frozenset[str]  # z. B. {r"\Sent", r"\HasNoChildren"} – als Text, Schreibweise wie vom Server
+    delimiter: str | None = "/"
+
+    @property
+    def selectable(self) -> bool:
+        return not any(f.lower() in (r"\noselect", r"\nonexistent") for f in self.flags)
+
+
+@dataclass(frozen=True)
 class MessageMeta:
     uid: int
     internaldate: datetime  # zeitzonenbewusst
@@ -36,7 +47,7 @@ class MessageMeta:
 
 
 class MailServer(Protocol):
-    def list_folders(self) -> list[str]: ...
+    def list_folders(self) -> list[FolderListing]: ...
     def select_folder(self, name: str) -> FolderInfo: ...
     def search_since(self, day: date) -> list[int]: ...
     def search_uid_from(self, first_uid: int) -> list[int]: ...
@@ -85,8 +96,15 @@ class ImapClientServer:
         except self._errors as exc:
             raise MailServerError(_describe(exc)) from None
 
-    def list_folders(self) -> list[str]:
-        return [name for _flags, _delim, name in self._call(self.client.list_folders)]
+    def list_folders(self) -> list[FolderListing]:
+        def text(v) -> str:
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+
+        return [
+            FolderListing(name=text(name), flags=frozenset(text(f) for f in flags),
+                          delimiter=text(delim) if delim else None)
+            for flags, delim, name in self._call(self.client.list_folders)
+        ]
 
     def select_folder(self, name: str) -> FolderInfo:
         info = self._call(self.client.select_folder, name, readonly=True)

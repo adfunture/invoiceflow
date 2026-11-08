@@ -76,7 +76,9 @@ _NET = re.compile(r"\b(?:nettobetrag|summe\s+netto|gesamt\s+netto|netto(?:summe|
 _TAX = re.compile(r"\b(?:(?:zzgl\.?|inkl\.?|plus)\s+)?(?:mwst\.?|ust\.?|umsatzsteuer|mehrwertsteuer|vat)\s*(?:\d{1,2}(?:[.,]\d+)?\s*%)?"
                   + _GAP + _CUR + _GAP + _AMOUNT + r"\s*" + _CUR, re.I)
 _ANY_DATE = re.compile(r"(?<![\d.])(\d{1,2}\.\d{1,2}\.\d{4})(?![\d.])")
-_CUSTOMER_VAT_CONTEXT = re.compile(r"\b(ihre|kunden|customer|your|empfänger)\b", re.I)
+_CUSTOMER_VAT_CONTEXT = re.compile(
+    r"\b(ihre|kunden|customer|your|buyer|käufer|empfänger|leistungsempfänger|rechnungsempfänger)", re.I
+)
 _VAT_ID = re.compile(r"\b(DE\s?\d{3}\s?\d{3}\s?\d{3}|ATU\d{8}|(?:BE|NL|FR|IT|ES|PL|LU|DK|SE|FI|CZ|IE|PT)[A-Z0-9]{8,12})\b")
 _TAX_NUMBER = re.compile(r"(?:steuer-?nr\.?|steuernummer|st\.-nr\.?)\s*[:]?\s*(\d{2,3}/\d{3}/\d{4,5}|\d{10,13})", re.I)
 _IBAN = re.compile(r"\b([A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?)\b")
@@ -233,4 +235,18 @@ def _supplier_name(text: str, own_aliases: list[str]) -> str | None:
                 continue
             if len(name) >= 4:
                 return name
+    return None
+
+
+def own_vat_as_sender(text: str, own_vat_ids: list[str]) -> str | None:
+    """Eigene USt-ID außerhalb eines Kunden-/Empfängerkontexts → vermutlich eigene Ausgangsrechnung."""
+    own = {normalize_vat_id(v) for v in own_vat_ids if v}
+    if not own:
+        return None
+    for line in text.splitlines():
+        if _CUSTOMER_VAT_CONTEXT.search(line):
+            continue
+        for m in _VAT_ID.finditer(line):
+            if (vat := normalize_vat_id(m.group(1))) in own:
+                return vat
     return None

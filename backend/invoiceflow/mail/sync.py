@@ -30,6 +30,7 @@ from invoiceflow.config import Settings
 from invoiceflow.db.enums import AttachmentSafety, EmailMessageStatus, JobType
 from invoiceflow.db.models import Company, EmailAttachment, EmailMessage, Mailbox, MailboxSyncState
 from invoiceflow.logging_setup import redact_text
+from invoiceflow.mail.folders import exclusion_reason
 from invoiceflow.mail.imap import ConnectionParams, MailServer, MailServerError, MailServerFactory, MessageMeta
 from invoiceflow.mail.mime import ParsedMessage, parse_message
 from invoiceflow.security.secrets import MissingSecretError, resolve_secret
@@ -65,6 +66,7 @@ class SyncResult:
     mailbox_id: int
     status: str  # ok | skipped_locked | skipped_inactive | failed
     folders: list[FolderResult] = field(default_factory=list)
+    discovered: list[str] = field(default_factory=list)  # in diesem Lauf neu gefundene Ordner
     error: str | None = None
 
     @property
@@ -169,13 +171,6 @@ class MailboxSyncer:
             if not self._acquire(db, mailbox_id):
                 return SyncResult(mailbox_id, "skipped_locked")
             company_slug = db.scalar(select(Company.slug).where(Company.id == mailbox.company_id))
-            folder_names = list(
-                db.scalars(
-                    select(MailboxSyncState.folder_name)
-                    .where(MailboxSyncState.mailbox_id == mailbox_id, MailboxSyncState.is_enabled.is_(True))
-                    .order_by(MailboxSyncState.id)
-                )
-            )
             max_attachment = int(app_settings.get_setting(db, "attachments.max_size_mb", mailbox.company_id)) * 1024 * 1024
             max_message = int(app_settings.get_setting(db, "imap.max_message_size_mb", mailbox.company_id)) * 1024 * 1024
             db.expunge(mailbox)
@@ -184,6 +179,14 @@ class MailboxSyncer:
         try:
             server = self._connect(mailbox)
             try:
+                result.discovered = self._discover_folders(server, mailbox)
+                with self.sessions() as db:
+                    folder_names = list(db.scalars(
+                        select(MailboxSyncState.folder_name)
+                        .where(MailboxSyncState.mailbox_id == mailbox_id, MailboxSyncState.is_enabled.is_(True),
+                               MailboxSyncState.missing_since.is_(None))
+                        .order_by(MailboxSyncState.id)
+                    ))
                 for name in folder_names:
                     try:
                         result.folders.append(
@@ -209,6 +212,47 @@ class MailboxSyncer:
         log.info("mailbox_synced", extra={"mailbox_id": mailbox_id, "status": result.status,
                                           "imported": result.imported, "error": result.error})
         return result
+
+    def _discover_folders(self, server: MailServer, mailbox: Mailbox) -> list[str]:
+        """Gleicht die Ordnerliste des Servers ab: neue Ordner anlegen (überwacht oder begründet ausgeschlossen),
+        verschwundene markieren, wieder aufgetauchte reaktivieren. Ein einmal angelegter Ordner behält seinen
+        Schalter – die Entscheidung eines Admins wird nie überschrieben."""
+        listings = [f for f in server.list_folders() if f.selectable]
+        on_server = {f.name for f in listings}
+        # Unterordner ausgeschlossener Ordner erben den Ausschluss (z. B. "Gesendet/2026", "Junk/Archiv").
+        reasons: dict[str, str | None] = {}
+        for f in sorted(listings, key=lambda f: f.name.count(f.delimiter or "\x00")):
+            reason = exclusion_reason(f)
+            if reason is None and f.delimiter:
+                parent = f.name.rsplit(f.delimiter, 1)[0] if f.delimiter in f.name else None
+                while parent and reason is None:
+                    reason = reasons.get(parent)
+                    parent = parent.rsplit(f.delimiter, 1)[0] if f.delimiter in parent else None
+            reasons[f.name] = reason
+
+        now = utcnow()
+        added: list[str] = []
+        with self.sessions() as db:
+            states = {s.folder_name: s for s in db.scalars(
+                select(MailboxSyncState).where(MailboxSyncState.mailbox_id == mailbox.id))}
+            for name in sorted(on_server - states.keys()):
+                reason = reasons[name]
+                db.add(MailboxSyncState(company_id=mailbox.company_id, mailbox_id=mailbox.id, folder_name=name[:500],
+                                        is_enabled=reason is None, exclusion_reason=reason, discovered_at=now))
+                added.append(name)
+            for name, state in states.items():
+                if name not in on_server and state.missing_since is None:
+                    state.missing_since = now
+                elif name in on_server and state.missing_since is not None:
+                    state.missing_since = None
+            if added:
+                audit(db, self.actor, "mailbox.folders_discovered", company_id=mailbox.company_id, entity_type="mailbox",
+                      entity_id=mailbox.id, details={
+                          "monitored": [n for n in added if reasons[n] is None],
+                          "excluded": {n: reasons[n] for n in added if reasons[n]},
+                      })
+            db.commit()
+        return added
 
     def _folder_error(self, mailbox_id: int, folder: str, error: str) -> None:
         with self.sessions() as db:

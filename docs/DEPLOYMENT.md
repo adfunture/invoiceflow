@@ -97,7 +97,11 @@ nur Chiffrat. In Produktion startet die App ohne `STORAGE_BACKEND=s3` nicht.
 | Public Networking | keins |
 | Variablen | wie `web` (DB, Speicher, Schlüssel, `INVOICEFLOW_SECRET_IMAP_*`) |
 
-Der Worker ruft aktive Postfächer alle 5 Minuten ab, schreibt einen Heartbeat
+Der Worker ruft aktive Postfächer alle 5 Minuten ab – **alle Ordner inklusive Unterordner**. Neue Ordner
+werden bei jedem Abruf erkannt und ab dem 08.11.2026 nachgeholt. Automatisch ausgeschlossen (im Dashboard
+sichtbar und einzeln einschaltbar) sind Gesendet, Entwürfe, Papierkorb und Spam samt deren Unterordnern –
+Gesendet enthält eigene Ausgangsrechnungen, Spam ist der häufigste Weg für gefälschte Rechnungen.
+Der Worker schreibt einen Heartbeat
 (`GET /api/workers`) und beendet sich bei einem Deploy nach der laufenden
 Nachricht. Ein abgebrochener Abruf wird an der letzten vollständig
 gespeicherten Nachricht fortgesetzt.

@@ -53,12 +53,13 @@ from invoiceflow.recognition.model import (
     ExtractedInvoice,
     identity_hash,
     normalize_invoice_number,
+    normalize_vat_id,
     supplier_key,
 )
 from invoiceflow.recognition.ocr import OcrProvider, OcrUnavailable, get_ocr
 from invoiceflow.recognition.pdf import PdfError, analyze_pdf
 from invoiceflow.recognition.recipient import CompanyNames, recipient_mismatch
-from invoiceflow.recognition.text_rules import classify, extract_fields
+from invoiceflow.recognition.text_rules import classify, extract_fields, own_vat_as_sender
 from invoiceflow.services import app_settings
 from invoiceflow.storage import DocumentStore, IntegrityError as StorageIntegrityError
 
@@ -462,6 +463,10 @@ def decide(analysis: Analysis, ctx: CompanyContext, ai_min_confidence: float) ->
         labels = {"invoice_number": "Rechnungsnummer", "invoice_date": "Rechnungsdatum", "gross_amount": "Bruttobetrag",
                   "currency": "Währung", "supplier": "Lieferant"}
         reasons.append("Pflichtangaben fehlen: " + ", ".join(labels[m] for m in missing))
+    own_vats = {normalize_vat_id(v) for v in ctx.own_vat_ids}
+    if (inv.supplier_vat_id and inv.supplier_vat_id in own_vats) or own_vat_as_sender(analysis.text, ctx.own_vat_ids):
+        reasons.append(f"Möglicherweise eigene Ausgangsrechnung ({ctx.own.short_name} ist Rechnungssteller) – "
+                       "nicht als Eingangsrechnung an DATEV senden")
     mismatch = recipient_mismatch(ctx.own, ctx.others, analysis.text, inv.recipient_name)
     if mismatch:
         reasons.append(mismatch)

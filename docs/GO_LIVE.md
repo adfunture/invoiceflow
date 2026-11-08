@@ -24,6 +24,8 @@ zeigt **0 blockierend**. Die fachliche Freigabe des DATEV-Versands erfolgt danac
 - [ ] ALL-INKL-IMAP-Host und Logins der drei SBC-Postfächer eingetragen
 - [ ] Domains `mail@` und `sascha.senninger@sbc-symbio.de` bestätigt
 - [ ] Alle fünf Postfächer: Testverbindung OK, aktiviert, erster Abruf hat seit 08.11.2026 nachgeholt
+- [ ] Je Postfach die Ordnerliste geprüft: alle Rechnungsordner „überwacht“, Gesendet/Papierkorb/Spam
+      „ausgeschlossen“; bewusst eingeschaltete Ausnahmen dokumentiert
 - [ ] Eigene USt-IDs beider Unternehmen hinterlegt (Einstellungen → Unternehmen)
 
 ## D. Erkennung (Stichprobe der ersten Tage)

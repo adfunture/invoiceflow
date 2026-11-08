@@ -174,7 +174,7 @@ def test_connection(
             timeout=min(settings.imap_timeout_seconds, 20),
         ))
         try:
-            out.folders = server.list_folders()
+            out.folders = [f.name for f in server.list_folders() if f.selectable]
             info = server.select_folder(DEFAULT_FOLDER)
             out.inbox_uidvalidity, out.inbox_messages = info.uidvalidity, info.exists
             out.ok = True

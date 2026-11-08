@@ -88,6 +88,9 @@ export interface Folder {
   backfill_completed_at: string | null;
   last_synced_at: string | null;
   last_error: string | null;
+  exclusion_reason: string | null;
+  discovered_at: string | null;
+  missing_since: string | null;
 }
 
 export interface Mailbox {
