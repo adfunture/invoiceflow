@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invoiceflow"
+version = "0.1.0"
+description = "Rechnungseingang aus IMAP-Postfaechern nach DATEV Unternehmen online (SBC symbio, Adfunture Outdoor)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy>=2.0.36,<2.1",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2.3",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "email-validator>=2.2",
+    "argon2-cffi>=23.1",
+    "cryptography>=43",
+    "tzdata>=2024.2",
+    "imapclient>=3.0",
+    "boto3>=1.35",
+    "pypdf>=5.1",
+    "defusedxml>=0.7.1",
+    "anthropic>=2.0",
+]
+
+[project.optional-dependencies]
+# Lokale OCR für Scan-PDFs; braucht zusätzlich das Systempaket tesseract-ocr (+ -deu).
+ocr = [
+    "pymupdf>=1.24",
+    "pytesseract>=0.3.13",
+    "pillow>=10.4",
+]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+]
+
+[project.scripts]
+invoiceflow = "invoiceflow.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["invoiceflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

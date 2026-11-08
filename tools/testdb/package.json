@@ -1,0 +1,16 @@
+{
+  "name": "invoiceflow-testdb",
+  "version": "1.0.0",
+  "description": "Lokales Postgres (PGlite) fuer Tests ohne Docker",
+  "scripts": {
+    "start": "pglite-server --port=54329 --db=memory:// --max-connections=8"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.16",
+    "@electric-sql/pglite-socket": "^0.0.22"
+  },
+  "private": true
+}

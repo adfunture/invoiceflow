@@ -1,0 +1,71 @@
+# Lokale Entwicklung: docker compose up --build
+# Danach: docker compose exec web invoiceflow create-user --email du@example.de --role admin
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: invoiceflow
+      POSTGRES_PASSWORD: invoiceflow
+      POSTGRES_DB: invoiceflow
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invoiceflow"]
+      interval: 5s
+      retries: 10
+
+  web:
+    build: .
+    command: sh -c "invoiceflow migrate && invoiceflow seed && uvicorn invoiceflow.api.app:app --host 0.0.0.0 --port 8080 --reload"
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://invoiceflow:invoiceflow@db:5432/invoiceflow
+      APP_ENV: development
+      COOKIE_SECURE: "false"
+      DATEV_ALLOW_REAL_SEND: "false"
+      STORAGE_LOCAL_PATH: /data/storage
+    ports: ["8080:8080"]
+    volumes: ["./backend/invoiceflow:/app/backend/invoiceflow", "storage:/data/storage"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  worker-imap:
+    build: .
+    command: invoiceflow worker imap
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://invoiceflow:invoiceflow@db:5432/invoiceflow
+      APP_ENV: development
+      STORAGE_LOCAL_PATH: /data/storage
+    volumes: ["storage:/data/storage"]
+    depends_on:
+      web: {condition: service_started}
+
+  worker-processing:
+    build: .
+    command: invoiceflow worker processing
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://invoiceflow:invoiceflow@db:5432/invoiceflow
+      APP_ENV: development
+      STORAGE_LOCAL_PATH: /data/storage
+    volumes: ["storage:/data/storage"]
+    depends_on:
+      web: {condition: service_started}
+
+  worker-datev:
+    build: .
+    command: invoiceflow worker datev
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://invoiceflow:invoiceflow@db:5432/invoiceflow
+      APP_ENV: development
+      STORAGE_LOCAL_PATH: /data/storage
+      DATEV_ALLOW_REAL_SEND: "false"   # lokal nie echt an DATEV senden
+    volumes: ["storage:/data/storage"]
+    depends_on:
+      web: {condition: service_started}
+
+volumes:
+  pgdata:
+  storage:

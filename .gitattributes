@@ -1,0 +1,4 @@
+# Einheitlich LF – Dockerfile und Shell-Befehle im Container vertragen kein CRLF.
+* text=auto eol=lf
+*.pdf binary
+*.png binary
