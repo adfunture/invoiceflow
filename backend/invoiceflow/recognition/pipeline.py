@@ -466,7 +466,7 @@ def decide(analysis: Analysis, ctx: CompanyContext, ai_min_confidence: float) ->
                   "currency": "Währung", "supplier": "Lieferant"}
         reasons.append("Pflichtangaben fehlen: " + ", ".join(labels[m] for m in missing))
     own_vats = {normalize_vat_id(v) for v in ctx.own_vat_ids}
-    if (inv.supplier_vat_id and inv.supplier_vat_id in own_vats) or own_vat_as_sender(analysis.text, ctx.own_vat_ids):
+    if (inv.supplier_vat_id and inv.supplier_vat_id in own_vats) or own_vat_as_sender(analysis.text, ctx.own_vat_ids, ctx.own.aliases):
         reasons.append(f"Möglicherweise eigene Ausgangsrechnung ({ctx.own.short_name} ist Rechnungssteller) – "
                        "nicht als Eingangsrechnung an DATEV senden")
     mismatch = recipient_mismatch(ctx.own, ctx.others, analysis.text, inv.recipient_name)

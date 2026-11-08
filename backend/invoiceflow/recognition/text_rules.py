@@ -25,7 +25,10 @@ HEADER_LINES = 40
 # Überschriften: eine Zeile, die nur aus dem Schlüsselwort besteht, optional
 # gefolgt von einer Belegnummer ("Rechnung", "Rechnung Nr. RE-1", "Gutschrift GS-5").
 # Sätze ("Rechnung folgt separat") und Verweise ("Lieferschein-Nr. 123") zählen nicht.
-_TITLE_SUFFIX = r"(?:\s+(?:nr\.?|nummer|no\.?|number|#)?\s*[:#]?\s*[A-Z0-9][\w\-/.]*)?\s*$"
+_DATE_VALUE = r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.?\s+[A-Za-zäöü]+\.?\s+\d{4})"
+# Optional mit Datum dahinter: "Rechnung Nr. 123 vom 01.11.2026".
+_TITLE_SUFFIX = (r"(?:\s+(?:nr\.?|nummer|no\.?|number|#)?\s*[:#]?\s*[A-Z0-9][\w\-/.]*"
+                 r"(?:\s+(?:vom|from|dated)\s+" + _DATE_VALUE.replace("(", "(?:", 1) + r")?)?\s*$")
 _TITLE_KEYWORDS: dict[DocumentType, str] = {
     DocumentType.cancellation: r"storno(?:rechnung)?|stornierung|rechnungsstorno|cancellation\s+invoice",
     DocumentType.credit_note: r"gutschrift|rechnungsgutschrift|credit\s*note",
@@ -33,7 +36,8 @@ _TITLE_KEYWORDS: dict[DocumentType, str] = {
     DocumentType.offer: r"angebot|kostenvoranschlag|quotation|quote|offer",
     DocumentType.order_confirmation: r"auftragsbestätigung|auftragsbestaetigung|bestellbestätigung|order\s+confirmation",
     DocumentType.delivery_note: r"lieferschein|delivery\s+note|packing\s+slip",
-    DocumentType.invoice: r"(?:schluss|abschlags|teil|sammel)?rechnung|rechnungskorrektur|korrekturrechnung|invoice|faktura|tax\s+invoice",
+    DocumentType.invoice: r"(?:schluss|abschlags|teil|sammel|honorar)?rechnung|rechnungskorrektur|korrekturrechnung|honorarnote|"
+                          r"invoice|faktura|tax\s+invoice",
 }
 _TITLE_PATTERNS: dict[DocumentType, re.Pattern[str]] = {
     t: re.compile(r"^\s*(?:" + kw + r")\b" + _TITLE_SUFFIX, re.I) for t, kw in _TITLE_KEYWORDS.items()
@@ -44,7 +48,7 @@ _CORRECTION = re.compile(r"\b(rechnungskorrektur|korrekturrechnung|korrigierte\s
 _PROFORMA = re.compile(r"\bpro\s*-?\s*forma\b", re.I)
 
 _NUMBER_LABEL = re.compile(
-    r"(?:rechnungs?[-\s]*(?:nummer|nr\.?)|rechnung\s+(?:nr\.?|nummer)|beleg[-\s]*(?:nummer|nr\.?)|"
+    r"(?:rechnungs?[-\s]*(?:nummer|nr\.?)|rechnung\s+(?:nr\.?|nummer)|beleg[-\s]*(?:nummer|nr\.?)|honorarnote\s*(?:nr\.?|nummer)|"
     r"gutschrift(?:s)?[-\s]*(?:nummer|nr\.?)|storno[-\s]*(?:nummer|nr\.?)|invoice\s*(?:no\.?|number|#|nr\.?)|"
     r"credit\s*note\s*(?:no\.?|number)|document\s*(?:no\.?|number))"
     r"\s*[:#]?\s*([A-Z0-9][A-Z0-9\-/._]{1,40})",
@@ -55,15 +59,16 @@ _REF_LABEL = re.compile(
     r"\s*(?:nr\.?|nummer)?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-/._]{1,40})",
     re.I,
 )
-_DATE_VALUE = r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.?\s+[A-Za-zäöü]+\.?\s+\d{4})"
 _INVOICE_DATE = re.compile(r"\b(?:rechnungsdatum|belegdatum|gutschriftsdatum|invoice\s+date)\s*[:]?\s*" + _DATE_VALUE, re.I)
+# "Rechnung Nr. 123 vom 01.11.2026": Datum hängt an der Rechnungsnummer.
+_NUMBER_DATE = re.compile(_NUMBER_LABEL.pattern + r"\s+(?:vom|from|dated)\s+" + _DATE_VALUE, re.I)
 _GENERIC_DATE = re.compile(r"\b(?:datum|date)\s*[:]?\s*" + _DATE_VALUE, re.I)
 _SERVICE_DATE = re.compile(r"\b(?:leistungsdatum|lieferdatum|leistungszeitraum|liefer-?/?leistungsdatum|delivery\s+date|service\s+date)\s*[:]?\s*" + _DATE_VALUE
                            + r"(?:\s*(?:-|–|bis)\s*" + _DATE_VALUE + r")?", re.I)
 _DUE_DATE = re.compile(r"(?:fällig(?:\s+am)?|zahlbar\s+bis(?:\s+zum)?|zahlungsziel|due\s+date|payable\s+by)\s*[:]?\s*" + _DATE_VALUE
                        + r"|(?:zahlbar|fällig|payable)[^\n]{0,50}?\b(?:bis|until|by)\s+(?:zum\s+|spätestens\s+)?" + _DATE_VALUE, re.I)
 _AMOUNT = r"(-?\s?(?:\d{1,3}(?:[.,\s']\d{3})+|\d+)(?:[.,]\d{2})?\s?-?)"
-_CUR = r"(?:€|eur|usd|chf|gbp|\$)?"
+_CUR = r"(?:€|euro?|usd|chf|gbp|\$)?"
 # Zwischen Bezeichnung und Betrag nur Trennzeichen/Währung, keine Wörter:
 # sonst würde "Rechnungsbetrag innerhalb von 7 Tagen" als Betrag 7 gelesen.
 _GAP = r"[ \t:=.()]{0,15}"
@@ -79,7 +84,7 @@ _ANY_DATE = re.compile(r"(?<![\d.])(\d{1,2}\.\d{1,2}\.\d{4})(?![\d.])")
 _CUSTOMER_VAT_CONTEXT = re.compile(
     r"\b(ihre|kunden|customer|your|buyer|käufer|empfänger|leistungsempfänger|rechnungsempfänger)", re.I
 )
-_VAT_ID = re.compile(r"\b(DE\s?\d{3}\s?\d{3}\s?\d{3}|ATU\d{8}|(?:BE|NL|FR|IT|ES|PL|LU|DK|SE|FI|CZ|IE|PT)[A-Z0-9]{8,12})\b")
+_VAT_ID = re.compile(r"\b(DE\s?\d{3}\s?\d{3}\s?\d{3}|ATU\d{8}|(?:BE|NL|FR|IT|ES|PL|LU|DK|SE|FI|CZ|IE|PT)\s?[A-Z0-9]{8,12})\b")
 _TAX_NUMBER = re.compile(r"(?:steuer-?nr\.?|steuernummer|st\.-nr\.?)\s*[:]?\s*(\d{2,3}/\d{3}/\d{4,5}|\d{10,13})", re.I)
 _IBAN = re.compile(r"\b([A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?)\b")
 _LEGAL_FORM_LINE = re.compile(
@@ -87,7 +92,11 @@ _LEGAL_FORM_LINE = re.compile(
     r"e\.\s?K\.|GbR|SE|Ltd\.?|Inc\.?|LLC|S\.A\.|S\.r\.l\.|B\.V\.))(?=$|[\s,·|•])",
 )
 _PAYMENT_TERMS = re.compile(r"^.*(?:zahlbar|zahlungsziel|zahlungsbedingung|payable|payment\s+terms|ohne\s+abzug|skonto).*$", re.I | re.M)
-_CURRENCY = re.compile(r"(€|\bEUR\b|\bUSD\b|\bCHF\b|\bGBP\b|\$)")
+_CURRENCY = re.compile(r"(€|\bEUR\b|\bEuro\b|\bUSD\b|\bCHF\b|\bGBP\b|\$)", re.I)
+_BANK_LINE = re.compile(r"^\s*(?:iban|bic|swift|blz)\b", re.I)
+_BARE_VAT_LINE = re.compile(r"^\s*" + _VAT_ID.pattern + r"\s*$")
+# So viele Zeilen nach dem eigenen Firmennamen gelten als Empfänger-Adressfeld.
+_RECIPIENT_BLOCK_LINES = 6
 
 
 def classify(text: str) -> tuple[DocumentType, Decimal, bool]:
@@ -161,7 +170,11 @@ def extract_fields(text: str, inv: ExtractedInvoice, own_aliases: list[str], own
             inv.set("referenced_invoice_number", ref, source)
             break
 
-    if m := _INVOICE_DATE.search(text) or _GENERIC_DATE.search(text):
+    if m := _INVOICE_DATE.search(text):
+        inv.set("invoice_date", parse_date(m.group(1)), source)
+    elif m := _NUMBER_DATE.search(text):
+        inv.set("invoice_date", parse_date(m.group(2)), source)
+    elif m := _GENERIC_DATE.search(text):
         inv.set("invoice_date", parse_date(m.group(1)), source)
     if m := _SERVICE_DATE.search(text):
         inv.set("service_date", parse_date(m.group(1)), source)
@@ -184,14 +197,14 @@ def extract_fields(text: str, inv: ExtractedInvoice, own_aliases: list[str], own
             if value is not None and value < 0:
                 setattr(inv, name, -value)
 
-    currencies = Counter(c.upper() for c in _CURRENCY.findall(text))
+    currencies = Counter({"€": "EUR", "EURO": "EUR", "$": "USD"}.get(c.upper(), c.upper()) for c in _CURRENCY.findall(text))
     if currencies:
-        top = currencies.most_common(1)[0][0]
-        inv.set("currency", {"€": "EUR", "$": "USD"}.get(top, top), source)
+        inv.set("currency", currencies.most_common(1)[0][0], source)
 
     own_vat = {normalize_vat_id(v) for v in own_vat_ids if v}
-    for line in text.splitlines():
-        if _CUSTOMER_VAT_CONTEXT.search(line):  # "Ihre USt-ID: …" ist die des Empfängers
+    recipient_lines = _recipient_block(text, own_aliases)
+    for i, line in enumerate(text.splitlines()):
+        if _CUSTOMER_VAT_CONTEXT.search(line) or i in recipient_lines:  # USt-ID des Empfängers
             continue
         vat = next((normalize_vat_id(m.group(1)) for m in _VAT_ID.finditer(line)), None)
         if vat and vat not in own_vat:
@@ -227,8 +240,12 @@ def _supplier_name(text: str, own_aliases: list[str]) -> str | None:
     own = [a.lower() for a in own_aliases if a]
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     # Absenderzeile im Adressfeld (oben) und Fußzeile (unten) sind die typischen Orte.
-    candidates = lines[:12] + lines[-15:]
-    for line in candidates:
+    head, tail = list(range(min(12, len(lines)))), list(range(max(12, len(lines) - 15), len(lines)))
+    for i in head + tail:
+        line = lines[i]
+        # Bankverbindung ("Volksbank AG" über "IBAN: …") ist nicht der Lieferant.
+        if _BANK_LINE.search(line) or (i + 1 < len(lines) and _BANK_LINE.match(lines[i + 1])):
+            continue
         for m in _LEGAL_FORM_LINE.finditer(line):
             name = re.sub(r"\s+", " ", m.group(1)).strip(" ,·|-")
             if any(alias in name.lower() or name.lower() in alias for alias in own):
@@ -238,13 +255,28 @@ def _supplier_name(text: str, own_aliases: list[str]) -> str | None:
     return None
 
 
-def own_vat_as_sender(text: str, own_vat_ids: list[str]) -> str | None:
+def _recipient_block(text: str, own_aliases: list[str]) -> set[int]:
+    """Zeilennummern im Empfänger-Adressfeld (unter dem eigenen Firmennamen), die nur eine
+    USt-ID ohne Label enthalten. So drucken ausländische Lieferanten die USt-ID des Empfängers
+    (Reverse Charge). Eine gelabelte eigene USt-ID ("USt-IdNr.: …", Fußzeile) bleibt verdächtig."""
+    own = [a.lower() for a in own_aliases if a and len(a) >= 4]
+    lines = text.splitlines()
+    block: set[int] = set()
+    for i, line in enumerate(lines):
+        if any(alias in line.lower() for alias in own):
+            block.update(j for j in range(i + 1, min(len(lines), i + 1 + _RECIPIENT_BLOCK_LINES))
+                         if _BARE_VAT_LINE.match(lines[j]))
+    return block
+
+
+def own_vat_as_sender(text: str, own_vat_ids: list[str], own_aliases: list[str] | None = None) -> str | None:
     """Eigene USt-ID außerhalb eines Kunden-/Empfängerkontexts → vermutlich eigene Ausgangsrechnung."""
     own = {normalize_vat_id(v) for v in own_vat_ids if v}
     if not own:
         return None
-    for line in text.splitlines():
-        if _CUSTOMER_VAT_CONTEXT.search(line):
+    recipient_lines = _recipient_block(text, own_aliases or [])
+    for i, line in enumerate(text.splitlines()):
+        if _CUSTOMER_VAT_CONTEXT.search(line) or i in recipient_lines:
             continue
         for m in _VAT_ID.finditer(line):
             if (vat := normalize_vat_id(m.group(1))) in own:

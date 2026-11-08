@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from dataclasses import dataclass, field
 
 from pypdf import PdfReader
@@ -46,6 +47,21 @@ class PdfAnalysis:
         return chars / max(1, len(self.pages_text)) < SCAN_CHARS_PER_PAGE
 
 
+def _page_text(page) -> str:
+    """Text in Leseposition: Label und Wert, die nebeneinander stehen, bleiben in einer Zeile
+    ("Rechnung Nr.   956   vom   13/04/2026"). Die einfache Extraktion gibt Spalten oft getrennt aus."""
+    try:
+        text = page.extract_text(extraction_mode="layout") or ""
+        # Einrückungen und Spaltenabstände auf zwei Leerzeichen kürzen, Spalten bleiben erkennbar.
+        return "\n".join(re.sub(r" {3,}", "  ", ln).rstrip() for ln in text.splitlines() if ln.strip())
+    except Exception:  # noqa: BLE001 – Layout-Modus scheitert an manchen Fonts; einfacher Modus als Ersatz
+        pass
+    try:
+        return page.extract_text() or ""
+    except Exception:  # noqa: BLE001 – einzelne kaputte Seite
+        return ""
+
+
 def analyze_pdf(data: bytes) -> PdfAnalysis:
     try:
         reader = PdfReader(io.BytesIO(data), strict=False)
@@ -57,10 +73,7 @@ def analyze_pdf(data: bytes) -> PdfAnalysis:
         count = len(pages)
         texts = []
         for page in list(pages)[:MAX_PAGES_FOR_TEXT]:
-            try:
-                texts.append(page.extract_text() or "")
-            except Exception:  # noqa: BLE001 – einzelne kaputte Seite
-                texts.append("")
+            texts.append(_page_text(page))
         analysis = PdfAnalysis(page_count=count, pages_text=texts)
         try:
             attachments = reader.attachments  # {name: [bytes, ...]}

@@ -10,8 +10,14 @@ def _escape(text: str) -> bytes:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("cp1252")
 
 
-def make_pdf(pages: list[list[str]] | list[str], *, producer: str = "InvoiceFlow-Test") -> bytes:
-    """Mehrseitiges PDF; jede Seite ist eine Liste von Textzeilen. Leere Seite = Scan ohne Textebene."""
+def make_pdf(pages: list[list[str]] | list[str], *, producer: str = "InvoiceFlow-Test",
+             positioned: list[tuple[int, int, str]] | None = None) -> bytes:
+    """Mehrseitiges PDF; jede Seite ist eine Liste von Textzeilen. Leere Seite = Scan ohne Textebene.
+
+    ``positioned``: einseitiges PDF aus (x, y, Text)-Blöcken in genau dieser Schreibreihenfolge –
+    so entstehen Tabellen, deren Spalten im Inhaltsstrom getrennt von ihren Labels stehen."""
+    if positioned is not None:
+        pages = [[]]
     if pages and isinstance(pages[0], str):
         pages = [pages]  # type: ignore[list-item]
     objects: list[bytes] = []
@@ -22,7 +28,9 @@ def make_pdf(pages: list[list[str]] | list[str], *, producer: str = "InvoiceFlow
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
     for lines in pages:
         stream = b"BT /F1 10 Tf 14 TL 50 800 Td " + b" ".join(b"(" + _escape(l) + b") Tj T*" for l in lines) + b" ET"
-        if not lines:
+        if positioned is not None:
+            stream = b" ".join(b"BT /F1 10 Tf 1 0 0 1 %d %d Tm (" % (x, y) + _escape(t) + b") Tj ET" for x, y, t in positioned)
+        elif not lines:
             stream = b"q 0 0 0 rg 50 50 100 100 re f Q"  # nur Grafik, kein Text
         content_id = len(objects) + 1
         objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")

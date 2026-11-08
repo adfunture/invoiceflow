@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 
@@ -18,7 +19,7 @@ from invoiceflow.recognition.model import (
 )
 from invoiceflow.recognition.pdf import PdfError, analyze_pdf
 from invoiceflow.recognition.recipient import CompanyNames, recipient_mismatch
-from invoiceflow.recognition.text_rules import classify, extract_fields
+from invoiceflow.recognition.text_rules import classify, extract_fields, own_vat_as_sender
 
 from .samples import cii_xml, invoice_lines, make_pdf, ubl_xml, with_embedded_xml
 
@@ -249,3 +250,55 @@ def test_ocr_not_configured_and_external_not_connected():
     for provider in (None, "external"):
         with pytest.raises(OcrUnavailable):
             get_ocr(provider)
+
+
+# Honorarnote eines italienischen Freiberuflers (Südtirol): Labels und Werte stehen in
+# getrennten Spalten, Datum im Format TT/MM/JJJJ, Betrag mit "Euro", Reverse Charge.
+SBC_ALIASES = ["SBC symbio GmbH & Co. KG", "SBC symbio"]
+_HONORARNOTE = [
+    (300, 760, "SBC SYMBIO GMBH & CO. KG"), (300, 746, "GARTENSTR. 25"), (300, 732, "D-88131 BODOLZ"),
+    (300, 718, "DE815512267"),
+    (50, 680, "HONORARNOTE Nr."), (50, 340, "Gesamtbetrag"), (50, 300, "IBAN: IT60 X054 2811 1010 0000 0123 456"),
+    (50, 314, "Muster Volksbank AG"),
+    (150, 680, "956"), (200, 680, "vom"), (240, 680, "13/04/2026"),
+    (300, 600, "Abschlussrechnung für das Jahr 2025"), (480, 600, "643,20"),
+    (300, 586, "MwSt.-Abrechnung im 'reverse-charge' Verfahren"),
+    (380, 340, "Euro"), (480, 340, "670,93"),
+    (50, 80, "Muster.Partner GmbH Freiberuflergesellschaft"),
+    (50, 66, "Eintragungs-, Steuer- und MwSt.-Nummer IT 01234567890"),
+]
+
+
+def test_layout_keeps_label_and_value_on_one_line():
+    text = analyze_pdf(make_pdf([], positioned=_HONORARNOTE)).text
+    assert re.search(r"HONORARNOTE Nr\.\s+956\s+vom\s+13/04/2026", text)
+    assert re.search(r"Gesamtbetrag\s+Euro\s+670,93", text)
+
+
+def test_italian_fee_note_is_recognised():
+    text = analyze_pdf(make_pdf([], positioned=_HONORARNOTE)).text
+    inv = ExtractedInvoice()
+    inv.document_type, _, _ = classify(text)
+    extract_fields(text, inv, SBC_ALIASES, ["DE815512267"])
+    assert inv.document_type == DocumentType.invoice
+    assert (inv.invoice_number, inv.invoice_date, inv.gross_amount, inv.currency) == (
+        "956", date(2026, 4, 13), Decimal("670.93"), "EUR")
+    assert inv.supplier_name == "Muster.Partner GmbH"  # nicht die Bank über der IBAN
+    assert inv.supplier_vat_id == "IT01234567890"
+    assert inv.missing_required() == []
+
+
+def test_own_vat_in_recipient_address_is_not_own_outgoing_invoice():
+    text = analyze_pdf(make_pdf([], positioned=_HONORARNOTE)).text
+    assert own_vat_as_sender(text, ["DE815512267"], SBC_ALIASES) is None
+    # Ohne Empfängerblock (eigene Firma nicht genannt) bleibt die Warnung.
+    assert own_vat_as_sender("Muster GmbH\nUSt-ID DE815512267", ["DE815512267"], SBC_ALIASES) == "DE815512267"
+
+
+def test_title_with_number_and_date_counts_as_invoice():
+    lines = ["Lieferant GmbH", "Rechnung Nr. 4711 vom 02.11.2026", "Gesamtbetrag 119,00 EUR"]
+    inv = ExtractedInvoice()
+    inv.document_type, _, _ = classify("\n".join(lines))
+    extract_fields("\n".join(lines), inv, ADF, [])
+    assert inv.document_type == DocumentType.invoice
+    assert (inv.invoice_number, inv.invoice_date) == ("4711", date(2026, 11, 2))
