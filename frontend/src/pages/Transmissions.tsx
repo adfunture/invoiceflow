@@ -4,8 +4,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { get, post, query, type Transmission, type TransmissionDetail } from "../api";
 import { useApp } from "../app-context";
 import { TransmissionActions } from "../components/TransmissionActions";
-import { Badge, Button, Card, Empty, ErrorBox, Field, Modal, PageHeader, Select, Spinner, StatusBadge, Table, td } from "../components/ui";
+import { Badge, Button, Card, Empty, ErrorBox, Field, Modal, Notice, PageHeader, Select, Spinner, StatusBadge, Table, td } from "../components/ui";
 import { fmtDateTime, SEND_MODE, TRANSMISSION_STATUS } from "../format";
+
+interface BulkSendResult {
+  queued: number[];
+  failed: { transmission_id: number; error: string }[];
+}
 
 export function TransmissionsPage() {
   const { companyId, companyName, canReview } = useApp();
@@ -29,15 +34,28 @@ export function TransmissionsPage() {
     void qc.invalidateQueries({ queryKey: ["transmissions"] });
     void qc.invalidateQueries({ queryKey: ["summary"] });
   };
-  // Nur gesendete, unbestätigte Übertragungen lassen sich bestätigen.
-  const confirmable = (list.data ?? []).filter((t) => t.status === "sent_unconfirmed" && !t.test_mode);
+  // Auswählbar: gesendete (→ bestätigen) sowie wartende/fehlgeschlagene (→ senden).
+  const rows = (list.data ?? []).filter((t) => !t.test_mode);
+  const confirmable = rows.filter((t) => t.status === "sent_unconfirmed");
+  const sendable = rows.filter((t) => t.status === "pending" || t.status === "failed");
+  const selectable = [...confirmable, ...sendable];
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const ids = confirmable.map((t) => t.id).filter((id) => selected.has(id));
+  const confirmIds = confirmable.map((t) => t.id).filter((id) => selected.has(id));
+  const sendIds = sendable.map((t) => t.id).filter((id) => selected.has(id));
   const confirm = useMutation({
     mutationFn: (transmissionIds: number[]) =>
       post("/api/datev/transmissions/bulk-confirm", { transmission_ids: transmissionIds, note: "In DATEV geprüft" }),
     onSuccess: () => {
-      setSelected(new Set());
+      setSelected((prev) => new Set([...prev].filter((id) => !confirmIds.includes(id))));
+      refresh();
+    },
+  });
+  const send = useMutation({
+    mutationFn: (transmissionIds: number[]) =>
+      post<BulkSendResult>("/api/datev/transmissions/bulk-send", { transmission_ids: transmissionIds }),
+    onSuccess: (result) => {
+      // Nicht sendbare bleiben markiert, damit der Grund sichtbar bleibt.
+      setSelected((prev) => new Set([...prev].filter((id) => !result.queued.includes(id))));
       refresh();
     },
   });
@@ -47,7 +65,8 @@ export function TransmissionsPage() {
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
-  const allSelected = confirmable.length > 0 && ids.length === confirmable.length;
+  const selectedCount = confirmIds.length + sendIds.length;
+  const allSelected = selectable.length > 0 && selectedCount === selectable.length;
 
   return (
     <>
@@ -66,27 +85,45 @@ export function TransmissionsPage() {
             <input type="checkbox" checked={includeTest} onChange={(e) => setParam("test", e.target.checked ? "1" : null)} />
             Testläufe anzeigen
           </label>
-          {canReview && confirmable.length > 0 && (
-            <Button variant="primary" className="ml-auto" disabled={ids.length === 0 || confirm.isPending}
-                    onClick={() => confirm.mutate(ids)}>
-              {ids.length > 0 ? `${ids.length} in DATEV bestätigen` : "In DATEV bestätigen"}
-            </Button>
+          {canReview && selectable.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              {sendable.length > 0 && (
+                <Button variant="primary" disabled={sendIds.length === 0 || send.isPending} onClick={() => send.mutate(sendIds)}>
+                  {sendIds.length > 0 ? `${sendIds.length} senden` : "Senden"}
+                </Button>
+              )}
+              {confirmable.length > 0 && (
+                <Button variant="primary" disabled={confirmIds.length === 0 || confirm.isPending}
+                        onClick={() => confirm.mutate(confirmIds)}>
+                  {confirmIds.length > 0 ? `${confirmIds.length} in DATEV bestätigen` : "In DATEV bestätigen"}
+                </Button>
+              )}
+            </div>
           )}
         </div>
         <ErrorBox error={list.error} />
         <ErrorBox error={confirm.error} />
+        <ErrorBox error={send.error} />
+        {send.data && send.data.failed.length > 0 && (
+          <div className="mb-3">
+            <Notice tone="warning">
+              {send.data.queued.length} zum Versand eingeplant, {send.data.failed.length} nicht möglich:{" "}
+              {send.data.failed.map((f) => `#${f.transmission_id}: ${f.error}`).join(" · ")}
+            </Notice>
+          </div>
+        )}
         {list.isLoading ? <Spinner /> : (list.data ?? []).length === 0 ? <Empty>Keine Übertragungen.</Empty> : (
           <Table head={[
-            ...(canReview ? [<input key="all" type="checkbox" aria-label="Alle gesendeten auswählen" checked={allSelected}
-                                    disabled={confirmable.length === 0}
-                                    onChange={() => setSelected(allSelected ? new Set() : new Set(confirmable.map((t) => t.id)))} />] : []),
+            ...(canReview ? [<input key="all" type="checkbox" aria-label="Alle auswählen" checked={allSelected}
+                                    disabled={selectable.length === 0}
+                                    onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((t) => t.id)))} />] : []),
             "#", "Unternehmen", "Lieferant", "Status", "Art", "Versuche", "Gesendet", "Hinweis", "",
           ]}>
             {list.data!.map((t) => (
               <tr key={t.id} className={selected.has(t.id) ? "bg-brand-50" : "hover:bg-slate-50"}>
                 {canReview && (
                   <td className={td}>
-                    {t.status === "sent_unconfirmed" && !t.test_mode && (
+                    {!t.test_mode && ["sent_unconfirmed", "pending", "failed"].includes(t.status) && (
                       <input type="checkbox" aria-label="Auswählen" checked={selected.has(t.id)} onChange={() => toggle(t.id)} />
                     )}
                   </td>

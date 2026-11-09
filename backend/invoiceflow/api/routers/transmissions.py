@@ -106,6 +106,14 @@ def confirm(transmission_id: int, body: NoteIn, auth: AuthContext = Depends(requ
     return _detail(db, t)
 
 
+@router.post("/transmissions/{transmission_id}/not-received", response_model=TransmissionDetailOut)
+def not_received(transmission_id: int, body: NoteIn, auth: AuthContext = Depends(require_admin),
+                 db: Session = Depends(get_db)):
+    """Gesendet, aber in DATEV nicht angekommen (Bounce): wieder einplanen."""
+    t = _run(db, ops.not_received, db, transmission_id, auth.actor, body.note, allowed=auth.company_ids)
+    return _detail(db, t)
+
+
 class BulkConfirmIn(StrictInput):
     transmission_ids: list[int] = Field(min_length=1, max_length=500)
     note: str = Field(default="In DATEV geprüft", min_length=3, max_length=2000)
@@ -130,6 +138,38 @@ def bulk_confirm(body: BulkConfirmIn, auth: AuthContext = Depends(require_review
             failed.append(transmission_id)
     db.commit()
     return BulkConfirmOut(confirmed=confirmed, failed=failed)
+
+
+class BulkSendIn(StrictInput):
+    transmission_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkSendFailure(BaseModel):
+    transmission_id: int
+    error: str
+
+
+class BulkSendOut(BaseModel):
+    queued: list[int]
+    failed: list[BulkSendFailure]
+
+
+@router.post("/transmissions/bulk-send", response_model=BulkSendOut)
+def bulk_send(body: BulkSendIn, auth: AuthContext = Depends(require_reviewer), db: Session = Depends(get_db),
+              settings: Settings = Depends(get_settings)):
+    """Mehrere wartende oder fehlgeschlagene Belege zum Versand freigeben. Jeder wird einzeln geprüft
+    (Freigabe, Testmodus, Dokumentstatus); nicht sendbare werden mit Grund zurückgemeldet."""
+    queued: list[int] = []
+    failed: list[BulkSendFailure] = []
+    for transmission_id in dict.fromkeys(body.transmission_ids):
+        try:
+            with db.begin_nested():
+                ops.request_send(db, transmission_id, auth.actor, settings, mode="manual", allowed=auth.company_ids)
+            queued.append(transmission_id)
+        except ops.OperationError as exc:
+            failed.append(BulkSendFailure(transmission_id=transmission_id, error=str(exc)))
+    db.commit()
+    return BulkSendOut(queued=queued, failed=failed)
 
 
 @router.post("/transmissions/{transmission_id}/resolve", response_model=TransmissionDetailOut)

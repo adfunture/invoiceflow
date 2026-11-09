@@ -96,6 +96,15 @@ def record_feedback(db: Session, t: DatevTransmission, actor: Actor, outcome: Li
     return t
 
 
+def not_received(db: Session, transmission_id: int, actor: Actor, note: str,
+                 allowed: set[int] | None = None) -> DatevTransmission:
+    """Gesendet, aber nicht in DATEV angekommen (z. B. Bounce "User unknown"): Rückmeldung
+    protokollieren und den Beleg wieder einplanen. Gesendet wird erst bei erfüllter Freigabe."""
+    t = _load(db, transmission_id, allowed)
+    record_feedback(db, t, actor, "rejected", note, source="manual")
+    return resolve_unclear(db, transmission_id, actor, was_sent=False, reason=note, allowed=allowed)
+
+
 def resolve_unclear(db: Session, transmission_id: int, actor: Actor, *, was_sent: bool, reason: str,
                     allowed: set[int] | None = None) -> DatevTransmission:
     """Klärt eine Übertragung mit unklarem Ergebnis. Erst danach ist ein erneuter Versand möglich."""

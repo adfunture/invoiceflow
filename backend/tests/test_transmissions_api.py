@@ -44,6 +44,34 @@ def test_bulk_confirm_only_sent_ones(admin, accounts, monkeypatch):
     assert again == {"confirmed": [], "failed": [t["id"]]}
 
 
+def test_bulk_send_requeues_failed_and_reports_blocked(admin, accounts, monkeypatch):
+    from .test_datev_sender import real_send_settings
+
+    configure_destination(monkeypatch)
+    ready_invoice(accounts)
+    sender(FakeTransport(SmtpResult(AttemptOutcome.rejected, 554, "5.6.0 CRLF"))).run_cycle()
+    t, = admin.get("/api/datev/transmissions").json()
+    assert t["status"] == "failed"
+    # Ohne DATEV_ALLOW_REAL_SEND: nicht eingeplant, Grund wird gemeldet.
+    blocked = admin.post("/api/datev/transmissions/bulk-send", json={"transmission_ids": [t["id"]]}).json()
+    assert blocked["queued"] == [] and "DATEV_ALLOW_REAL_SEND" in blocked["failed"][0]["error"]
+    _override_settings(admin, real_send_settings())
+    body = admin.post("/api/datev/transmissions/bulk-send", json={"transmission_ids": [t["id"], 999_999]}).json()
+    assert body["queued"] == [t["id"]] and [f["transmission_id"] for f in body["failed"]] == [999_999]
+    assert admin.get(f"/api/datev/transmissions/{t['id']}").json()["status"] == "ready"
+
+
+def test_not_received_requeues_bounced_transmission(admin, accounts, monkeypatch):
+    configure_destination(monkeypatch)
+    ready_invoice(accounts)
+    sender(FakeTransport()).run_cycle()
+    t, = admin.get("/api/datev/transmissions").json()
+    body = admin.post(f"/api/datev/transmissions/{t['id']}/not-received", json={"note": "550 User unknown"}).json()
+    assert body["status"] == "pending"
+    log = admin.get("/api/audit-logs", params={"entity_type": "datev_transmission"}).json()
+    assert {"datev.feedback.rejected", "datev.unclear_resolved"} <= {e["action"] for e in log}
+
+
 def test_test_delivery_admin_only_and_gate(admin, accounts, monkeypatch):
     from .test_datev_sender import real_send_settings
 

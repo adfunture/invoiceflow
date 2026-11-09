@@ -4,11 +4,12 @@ import { post, type Transmission } from "../api";
 import { useApp } from "../app-context";
 import { Button, ErrorBox, Field, Modal, Notice, Textarea } from "./ui";
 
-type Action = "send" | "test_delivery" | "confirm" | "resolve_sent" | "resolve_not_sent";
+type Action = "send" | "test_delivery" | "confirm" | "not_received" | "resolve_sent" | "resolve_not_sent";
 
 // Vorausgefüllter Vermerk; bleibt das Feld leer, wird er trotzdem protokolliert.
 const DEFAULT_NOTE: Partial<Record<Action, string>> = {
   confirm: "In DATEV geprüft",
+  not_received: "Nicht in DATEV angekommen (Bounce)",
   resolve_sent: "In DATEV vorhanden",
   resolve_not_sent: "In DATEV nicht vorhanden",
 };
@@ -20,6 +21,8 @@ const TEXT: Record<Action, { title: string; button: string; info: string }> = {
     info: "Echter Versand vor der Produktivfreigabe, um Schritt 5 der Checkliste zu prüfen. Nur für Admins." },
   confirm: { title: "Eingang in DATEV bestätigen", button: "Bestätigen",
     info: "Nur bestätigen, wenn der Beleg in DATEV Unternehmen online sichtbar ist." },
+  not_received: { title: "Nicht in DATEV angekommen", button: "Nicht angekommen",
+    info: "Z. B. Rückläufer \"User unknown\". Der Beleg wird wieder eingeplant und erneut gesendet, sobald die DATEV-Freigabe es erlaubt – vorher Zieladresse prüfen." },
   resolve_sent: { title: "Unklaren Versand klären: angekommen", button: "Als zugestellt markieren",
     info: "Der Beleg ist in DATEV vorhanden. Er wird nicht erneut gesendet." },
   resolve_not_sent: { title: "Unklaren Versand klären: nicht angekommen", button: "Erneut einplanen",
@@ -36,6 +39,7 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
       const text = note.trim() || DEFAULT_NOTE[a] || "";
       if (a === "send" || a === "test_delivery") return post(`${base}/send`, { mode: a === "send" ? "manual" : "test_delivery" });
       if (a === "confirm") return post(`${base}/confirm`, { note: text });
+      if (a === "not_received") return post(`${base}/not-received`, { note: text });
       return post(`${base}/resolve`, { was_sent: a === "resolve_sent", reason: text });
     },
     onSuccess: () => {
@@ -50,15 +54,16 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
   if (t.status === "pending" || t.status === "failed") buttons.push("send");
   if ((t.status === "pending" || t.status === "failed") && isAdmin) buttons.push("test_delivery");
   if (t.status === "sent_unconfirmed") buttons.push("confirm");
+  if (t.status === "sent_unconfirmed" && isAdmin) buttons.push("not_received");
   if (t.status === "manual_review" && isAdmin) buttons.push("resolve_sent", "resolve_not_sent");
   if (!buttons.length) return null;
-  const needsNote = action === "confirm" || action === "resolve_sent" || action === "resolve_not_sent";
+  const needsNote = action === "confirm" || action === "not_received" || action === "resolve_sent" || action === "resolve_not_sent";
 
   return (
     <>
       <div className="flex flex-wrap gap-2">
         {buttons.map((b) => (
-          <Button key={b} variant={b === "resolve_not_sent" ? "secondary" : b === "confirm" || b === "send" ? "primary" : "secondary"}
+          <Button key={b} variant={b === "resolve_not_sent" || b === "not_received" ? "secondary" : b === "confirm" || b === "send" ? "primary" : "secondary"}
             onClick={() => { mutation.reset(); setNote(DEFAULT_NOTE[b] ?? ""); setAction(b); }}>
             {TEXT[b].button}
           </Button>
@@ -70,7 +75,7 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
           <Button variant="primary" disabled={mutation.isPending}
             onClick={() => mutation.mutate(action)}>{TEXT[action].button}</Button>
         </>}>
-          <Notice tone={action === "test_delivery" || action === "resolve_not_sent" ? "warning" : "info"}>{TEXT[action].info}</Notice>
+          <Notice tone={action === "test_delivery" || action === "resolve_not_sent" || action === "not_received" ? "warning" : "info"}>{TEXT[action].info}</Notice>
           <p className="text-sm text-slate-600">Ziel: <b>{t.destination_address ?? "aus DATEV-Einstellungen"}</b></p>
           {needsNote && (
             <Field label="Vermerk (optional, wird protokolliert)">
