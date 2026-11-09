@@ -46,13 +46,34 @@ def test_review_approve_with_corrections(admin, accounts):
     (doc, _), = _setup(accounts, ("r.pdf", make_pdf(lines), PDF))
     assert doc.status == "manual_review"
     url = f"/api/documents/{doc.id}/review"
-    assert admin.post(url, json={"decision": "approve", "reason": "geprüft"}).status_code == 422  # Pflichtfelder fehlen
     body = admin.post(url, json={"decision": "approve", "reason": "Betrag aus Papierbeleg ergänzt", "corrections": {
         "invoice_date": "2026-11-09", "gross_amount": "50.00", "currency": "eur"}}).json()
     assert body["status"] == "ready_for_datev"
     assert body["invoice"]["field_sources"]["gross_amount"] == "manual"
     log = admin.get("/api/audit-logs", params={"entity_type": "document"}).json()[0]
     assert log["action"] == "document.review.approve" and log["details"]["corrections"]["currency"]["new"] == "EUR"
+
+
+def test_review_approve_without_data_is_one_click(admin, accounts):
+    """Manuelle Freigabe ohne Rechnungsdaten: unklare Art wird Rechnung, Fehlendes wird nur protokolliert."""
+    (doc, _), = _setup(accounts, ("spedition.pdf", make_pdf(["Spedition GmbH", "Seite 1", "Übertrag 219,82"]), PDF))
+    assert doc.status == "manual_review"
+    body = admin.post(f"/api/documents/{doc.id}/review", json={"decision": "approve", "reason": "Manuell geprüft"}).json()
+    assert body["status"] == "ready_for_datev" and body["document_type"] == "invoice"
+    log = admin.get("/api/audit-logs", params={"entity_type": "document"}).json()[0]
+    assert "gross_amount" in log["details"]["missing_fields"] and log["details"]["document_type_set"]["new"] == "invoice"
+
+
+def test_review_approve_blocks_identical_file_already_released(admin, accounts):
+    pdf = make_pdf(["Spedition GmbH", "Seite 1"])
+    _setup(accounts, ("a.pdf", pdf, PDF))
+    deliver(accounts, [("b.pdf", pdf, PDF)], subject="nochmal")
+    process(accounts)
+    first, second = (d for d, _ in documents())
+    assert admin.post(f"/api/documents/{first.id}/review", json={"decision": "approve", "reason": "ok ok"}).status_code == 200
+    # Zweites Exemplar ist entweder schon als Dublette erkannt oder wird bei Freigabe blockiert.
+    response = admin.post(f"/api/documents/{second.id}/review", json={"decision": "approve", "reason": "ok ok"})
+    assert response.status_code == 409
 
 
 def test_review_approve_blocked_if_same_invoice_already_released(admin, accounts):

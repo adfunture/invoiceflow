@@ -129,22 +129,31 @@ def review_document(db: Session, doc_id: int, actor: Actor, *, decision: str, re
         if corrections:
             details["corrections"] = _apply_corrections(meta, corrections)
         if meta.document_type not in INVOICE_LIKE:
-            raise ReviewError("Freigabe nur für Rechnung, Gutschrift oder Storno – Dokumentart korrigieren")
+            # Wer freigibt, bestätigt: Das ist eine Rechnung.
+            details["document_type_set"] = {"old": meta.document_type.value, "new": DocumentType.invoice.value}
+            meta.document_type = DocumentType.invoice
         inv = _to_invoice(meta)
+        # Fehlende Angaben blockieren nicht: DATEV liest den Beleg selbst aus. Sie werden protokolliert.
         missing = inv.missing_required()
         if missing:
-            raise ReviewError("Pflichtangaben fehlen: " + ", ".join(missing))
+            details["missing_fields"] = missing
         meta.invoice_number_normalized = normalize_invoice_number(meta.invoice_number)
         meta.supplier_key = supplier_key(inv)
         meta.identity_hash = identity_hash(doc.company_id, inv)
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
-                   {"k": f"inv:{doc.company_id}:{meta.supplier_key}:{meta.invoice_number_normalized}"})
-        clash = db.scalar(
-            select(Document.id).join(InvoiceMetadata, InvoiceMetadata.document_id == Document.id)
-            .where(InvoiceMetadata.company_id == doc.company_id, InvoiceMetadata.identity_hash == meta.identity_hash,
-                   Document.id != doc.id, Document.status.in_(LIVE)).limit(1))
-        if clash is not None:
-            raise ReviewError(f"Gleiche Rechnung ist bereits als Dokument {clash} freigegeben", 409)
+        same_file = db.scalar(select(Document.id).where(
+            Document.company_id == doc.company_id, Document.sha256 == doc.sha256, Document.id != doc.id,
+            Document.status.in_(LIVE)).limit(1))
+        if same_file is not None:
+            raise ReviewError(f"Identische Datei ist bereits als Dokument {same_file} freigegeben", 409)
+        if meta.identity_hash:  # nur bei vollständigen Kerndaten vergleichbar
+            db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                       {"k": f"inv:{doc.company_id}:{meta.supplier_key}:{meta.invoice_number_normalized}"})
+            clash = db.scalar(
+                select(Document.id).join(InvoiceMetadata, InvoiceMetadata.document_id == Document.id)
+                .where(InvoiceMetadata.company_id == doc.company_id, InvoiceMetadata.identity_hash == meta.identity_hash,
+                       Document.id != doc.id, Document.status.in_(LIVE)).limit(1))
+            if clash is not None:
+                raise ReviewError(f"Gleiche Rechnung ist bereits als Dokument {clash} freigegeben", 409)
         doc.document_type = meta.document_type
         doc.status = (DocumentStatus.awaiting_datev_xml_integration
                       if doc.source_kind in (SourceKind.xml_xrechnung, SourceKind.xml_other)

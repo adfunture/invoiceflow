@@ -171,7 +171,7 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
-      <ReviewDialog doc={d} mode={dialog} onClose={() => setDialog(null)} onDone={() => { setDialog(null); refresh(); }} />
+      <ReviewDialog key={dialog ?? "closed"} doc={d} mode={dialog} onClose={() => setDialog(null)} onDone={() => { setDialog(null); refresh(); }} />
     </>
   );
 }
@@ -187,13 +187,17 @@ const CORRECTABLE: [string, string, string][] = [
   ["currency", "Währung", "text"],
 ];
 
+const INVOICE_LIKE = ["invoice", "credit_note", "cancellation"];
+
 function ReviewDialog({ doc, mode, onClose, onDone }: {
   doc: DocumentDetail; mode: null | "approve" | "ignore" | "duplicate"; onClose: () => void; onDone: () => void;
 }) {
   const inv = doc.invoice;
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(mode === "approve" ? "Manuell geprüft" : "");
   const [dupOf, setDupOf] = useState("");
-  const [docType, setDocType] = useState(inv?.document_type ?? doc.document_type);
+  const detectedType = inv?.document_type ?? doc.document_type;
+  // Freigabe heißt "ist eine Rechnung"; unklare Art wird beim Freigeben zur Rechnung.
+  const [docType, setDocType] = useState(INVOICE_LIKE.includes(detectedType) ? detectedType : "invoice");
   const [values, setValues] = useState<Record<string, string>>({});
   const mutation = useMutation({
     mutationFn: () => {
@@ -201,7 +205,7 @@ function ReviewDialog({ doc, mode, onClose, onDone }: {
       for (const [key] of CORRECTABLE) {
         if (key in values) corrections[key] = values[key] === "" ? null : values[key];
       }
-      if (docType !== (inv?.document_type ?? doc.document_type)) corrections.document_type = docType;
+      if (docType !== detectedType) corrections.document_type = docType;
       return post(`/api/documents/${doc.id}/review`, {
         decision: mode === "duplicate" ? "mark_duplicate" : mode,
         reason,
@@ -224,24 +228,26 @@ function ReviewDialog({ doc, mode, onClose, onDone }: {
       {mode === "approve" && (
         <>
           <p className="text-sm text-slate-600">
-            Fehlende oder falsche Werte hier korrigieren. Nach der Freigabe wird der Beleg für DATEV eingeplant
-            (Versand nur, wenn die DATEV-Freigabe es erlaubt). Die Unternehmenszuordnung kann nicht geändert werden.
+            Der Beleg wird so wie er ist für DATEV eingeplant (Versand nur, wenn die DATEV-Freigabe es erlaubt).
+            DATEV liest die Rechnungsdaten selbst aus – Angaben hier sind nicht nötig.
           </p>
           <Field label="Dokumenttyp">
             <Select value={docType} onChange={(e) => setDocType(e.target.value)}>
-              {["invoice", "credit_note", "cancellation"].map((k) => <option key={k} value={k}>{DOCUMENT_TYPE[k]}</option>)}
-              {!["invoice", "credit_note", "cancellation"].includes(docType) && <option value={docType}>{DOCUMENT_TYPE[docType] ?? docType}</option>}
+              {INVOICE_LIKE.map((k) => <option key={k} value={k}>{DOCUMENT_TYPE[k]}</option>)}
             </Select>
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            {CORRECTABLE.map(([key, label, type]) => (
-              <Field key={key} label={label}>
-                <Input type={type} step={type === "number" ? "0.01" : undefined}
-                  value={values[key] ?? current(key) ?? ""}
-                  onChange={(e) => setValues({ ...values, [key]: e.target.value })} />
-              </Field>
-            ))}
-          </div>
+          <details className="rounded border border-slate-200 px-3 py-2 text-sm">
+            <summary className="cursor-pointer text-slate-600">Rechnungsdaten korrigieren (optional)</summary>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              {CORRECTABLE.map(([key, label, type]) => (
+                <Field key={key} label={label}>
+                  <Input type={type} step={type === "number" ? "0.01" : undefined}
+                    value={values[key] ?? current(key) ?? ""}
+                    onChange={(e) => setValues({ ...values, [key]: e.target.value })} />
+                </Field>
+              ))}
+            </div>
+          </details>
         </>
       )}
       {mode === "duplicate" && (
