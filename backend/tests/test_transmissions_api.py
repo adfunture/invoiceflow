@@ -29,6 +29,20 @@ def test_transmission_log_and_confirm(admin, accounts, monkeypatch):
     assert {e["action"] for e in log} >= {"datev.sent", "datev.feedback.confirmed"}
 
 
+def test_bulk_confirm_only_sent_ones(admin, accounts, monkeypatch):
+    configure_destination(monkeypatch)
+    ready_invoice(accounts)
+    sender(FakeTransport()).run_cycle()
+    t, = admin.get("/api/datev/transmissions").json()
+    body = admin.post("/api/datev/transmissions/bulk-confirm",
+                      json={"transmission_ids": [t["id"], 999_999]}).json()
+    assert body == {"confirmed": [t["id"]], "failed": [999_999]}
+    assert admin.get(f"/api/datev/transmissions/{t['id']}").json()["status"] == "confirmed"
+    # Bereits bestätigt → wird übersprungen, kein Fehler für die ganze Auswahl.
+    again = admin.post("/api/datev/transmissions/bulk-confirm", json={"transmission_ids": [t["id"]]}).json()
+    assert again == {"confirmed": [], "failed": [t["id"]]}
+
+
 def test_test_delivery_admin_only_and_gate(admin, accounts, monkeypatch):
     from .test_datev_sender import real_send_settings
 

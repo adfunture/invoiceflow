@@ -1,13 +1,14 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { get, query, type Transmission, type TransmissionDetail } from "../api";
+import { get, post, query, type Transmission, type TransmissionDetail } from "../api";
 import { useApp } from "../app-context";
 import { TransmissionActions } from "../components/TransmissionActions";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Modal, PageHeader, Select, Spinner, StatusBadge, Table, td } from "../components/ui";
 import { fmtDateTime, SEND_MODE, TRANSMISSION_STATUS } from "../format";
 
 export function TransmissionsPage() {
-  const { companyId, companyName } = useApp();
+  const { companyId, companyName, canReview } = useApp();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const status = params.get("status") ?? "";
@@ -28,6 +29,25 @@ export function TransmissionsPage() {
     void qc.invalidateQueries({ queryKey: ["transmissions"] });
     void qc.invalidateQueries({ queryKey: ["summary"] });
   };
+  // Nur gesendete, unbestätigte Übertragungen lassen sich bestätigen.
+  const confirmable = (list.data ?? []).filter((t) => t.status === "sent_unconfirmed" && !t.test_mode);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const ids = confirmable.map((t) => t.id).filter((id) => selected.has(id));
+  const confirm = useMutation({
+    mutationFn: (transmissionIds: number[]) =>
+      post("/api/datev/transmissions/bulk-confirm", { transmission_ids: transmissionIds, note: "In DATEV geprüft" }),
+    onSuccess: () => {
+      setSelected(new Set());
+      refresh();
+    },
+  });
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const allSelected = confirmable.length > 0 && ids.length === confirmable.length;
 
   return (
     <>
@@ -46,12 +66,31 @@ export function TransmissionsPage() {
             <input type="checkbox" checked={includeTest} onChange={(e) => setParam("test", e.target.checked ? "1" : null)} />
             Testläufe anzeigen
           </label>
+          {canReview && confirmable.length > 0 && (
+            <Button variant="primary" className="ml-auto" disabled={ids.length === 0 || confirm.isPending}
+                    onClick={() => confirm.mutate(ids)}>
+              {ids.length > 0 ? `${ids.length} in DATEV bestätigen` : "In DATEV bestätigen"}
+            </Button>
+          )}
         </div>
         <ErrorBox error={list.error} />
+        <ErrorBox error={confirm.error} />
         {list.isLoading ? <Spinner /> : (list.data ?? []).length === 0 ? <Empty>Keine Übertragungen.</Empty> : (
-          <Table head={["#", "Unternehmen", "Beleg", "Status", "Art", "Versuche", "Gesendet", "Hinweis", ""]}>
+          <Table head={[
+            ...(canReview ? [<input key="all" type="checkbox" aria-label="Alle gesendeten auswählen" checked={allSelected}
+                                    disabled={confirmable.length === 0}
+                                    onChange={() => setSelected(allSelected ? new Set() : new Set(confirmable.map((t) => t.id)))} />] : []),
+            "#", "Unternehmen", "Beleg", "Status", "Art", "Versuche", "Gesendet", "Hinweis", "",
+          ]}>
             {list.data!.map((t) => (
-              <tr key={t.id} className="hover:bg-slate-50">
+              <tr key={t.id} className={selected.has(t.id) ? "bg-brand-50" : "hover:bg-slate-50"}>
+                {canReview && (
+                  <td className={td}>
+                    {t.status === "sent_unconfirmed" && !t.test_mode && (
+                      <input type="checkbox" aria-label="Auswählen" checked={selected.has(t.id)} onChange={() => toggle(t.id)} />
+                    )}
+                  </td>
+                )}
                 <td className={`${td} num text-slate-500`}>{t.id}</td>
                 <td className={td}>{companyName(t.company_id)}</td>
                 <td className={td}><Link className="text-brand-700 hover:underline" to={`/documents/${t.document_id}`}>Dokument {t.document_id}</Link></td>

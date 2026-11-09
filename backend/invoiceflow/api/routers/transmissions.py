@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from invoiceflow.api.schemas import (
     NoteIn,
     ResolveIn,
     SendRequestIn,
+    StrictInput,
     TransmissionDetailOut,
     TransmissionOut,
 )
@@ -93,6 +95,32 @@ def confirm(transmission_id: int, body: NoteIn, auth: AuthContext = Depends(requ
     """Manuelle Bestätigung: Beleg ist in DATEV Unternehmen online angekommen."""
     t = _run(db, ops.confirm, db, transmission_id, auth.actor, body.note, allowed=auth.company_ids)
     return _detail(db, t)
+
+
+class BulkConfirmIn(StrictInput):
+    transmission_ids: list[int] = Field(min_length=1, max_length=500)
+    note: str = Field(default="In DATEV geprüft", min_length=3, max_length=2000)
+
+
+class BulkConfirmOut(BaseModel):
+    confirmed: list[int]
+    failed: list[int]
+
+
+@router.post("/transmissions/bulk-confirm", response_model=BulkConfirmOut)
+def bulk_confirm(body: BulkConfirmIn, auth: AuthContext = Depends(require_reviewer), db: Session = Depends(get_db)):
+    """Mehrere gesendete Belege als in DATEV angekommen bestätigen; andere Status werden übersprungen."""
+    confirmed: list[int] = []
+    failed: list[int] = []
+    for transmission_id in dict.fromkeys(body.transmission_ids):
+        try:
+            with db.begin_nested():
+                ops.confirm(db, transmission_id, auth.actor, body.note, allowed=auth.company_ids)
+            confirmed.append(transmission_id)
+        except ops.OperationError:
+            failed.append(transmission_id)
+    db.commit()
+    return BulkConfirmOut(confirmed=confirmed, failed=failed)
 
 
 @router.post("/transmissions/{transmission_id}/resolve", response_model=TransmissionDetailOut)
