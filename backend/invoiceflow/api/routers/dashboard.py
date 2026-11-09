@@ -67,8 +67,12 @@ def summary(
     sent_states = (TransmissionStatus.sent_unconfirmed, TransmissionStatus.confirmed)
 
     now = datetime.now(tz)
-    stale = [w.worker_id for w in db.scalars(select(WorkerHeartbeat).where(
-        WorkerHeartbeat.last_beat_at > now - timedelta(days=1), WorkerHeartbeat.last_beat_at < now - timedelta(minutes=3)))]
+    # Je Worker-Art zählt der jüngste Heartbeat: Nach einem Neustart meldet sich der neue Container
+    # mit neuer ID, der alte verstummt – das ist kein Ausfall.
+    latest = func.max(WorkerHeartbeat.last_beat_at)
+    stale = list(db.scalars(
+        select(WorkerHeartbeat.worker_type).group_by(WorkerHeartbeat.worker_type)
+        .having(latest > now - timedelta(days=1), latest < now - timedelta(minutes=3))))
 
     return Summary(
         recognized_today=count(Document, Document.created_at >= today_start, Document.document_type.in_(INVOICE_LIKE)),

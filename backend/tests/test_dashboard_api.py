@@ -30,3 +30,24 @@ def test_summary_scoped_to_company(admin, accounts):
     sbc.login("sbc@sbc-symbio.de")
     assert sbc.get("/api/dashboard/summary").json()["recognized_today"] == 0
     assert admin.get("/api/dashboard/summary").json()["recognized_today"] == 1
+
+
+def test_stale_workers_only_when_no_container_of_that_type_is_alive(admin):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from invoiceflow.db.models import WorkerHeartbeat
+    from invoiceflow.db.session import get_sessionmaker
+    from invoiceflow.workers.base import heartbeat
+
+    old = datetime.now(UTC) - timedelta(minutes=10)
+    with get_sessionmaker()() as s:
+        heartbeat(s, "datev:alt:1", "datev", datetime.now(UTC), {})  # vor dem Neustart
+        heartbeat(s, "datev:neu:1", "datev", datetime.now(UTC), {})  # neuer Container
+        heartbeat(s, "imap:weg:1", "imap", datetime.now(UTC), {})    # wirklich ausgefallen
+        s.execute(update(WorkerHeartbeat).where(WorkerHeartbeat.worker_id.in_(["datev:alt:1", "imap:weg:1"]))
+                  .values(last_beat_at=old))
+        s.commit()
+    summary = admin.get("/api/dashboard/summary").json()
+    assert summary["stale_workers"] == ["imap"]
