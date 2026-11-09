@@ -58,6 +58,14 @@ def _classify(code: int, response) -> SmtpResult:
     return SmtpResult(AttemptOutcome.rejected, code, _text(response))
 
 
+def to_wire_bytes(message: EmailMessage) -> bytes:
+    """Mail mit CRLF-Zeilenenden, wie SMTP (RFC 5321) es verlangt.
+
+    ``smtplib.data`` korrigiert Zeilenenden nur bei ``str``; ``as_bytes()`` liefert sonst
+    nacktes LF. Tolerante Server (ALL-INKL) nehmen das an, Strato lehnt mit 554 5.6.0 ab."""
+    return message.as_bytes(policy=message.policy.clone(linesep="\r\n"))
+
+
 class SmtpTransport:
     """Echter Versand über smtplib (TLS mit Zertifikatsprüfung)."""
 
@@ -94,7 +102,7 @@ class SmtpTransport:
                 return _classify(code, resp)
             # --- ab hier keine sichere Aussage mehr bei Abbruch -------------------
             try:
-                code, resp = smtp.data(message.as_bytes())
+                code, resp = smtp.data(to_wire_bytes(message))
             except smtplib.SMTPDataError as exc:
                 # DATA wurde nicht mit 354 beantwortet → Inhalt wurde nicht übertragen.
                 return _classify(exc.smtp_code, exc.smtp_error)

@@ -497,3 +497,20 @@ def test_smtp_result_classification(monkeypatch, behaviour, expected):
     msg.set_content("x")
     params = SmtpParams("smtp.strato.de", 465, TlsMode.ssl, "u", "p")
     assert transport.send(msg, params, "a@b.de", TARGET).outcome == expected
+
+
+def test_wire_bytes_use_crlf_everywhere():
+    """Strato lehnt nacktes LF ab: 554 5.6.0 "A header line must be terminated by CRLF"."""
+    import re
+
+    from invoiceflow.datev.smtp import to_wire_bytes
+
+    msg = EmailMessage()
+    msg["From"] = "info@adfunture.de"
+    msg["To"] = "x@uploadmail.datev.de"
+    msg["Subject"] = "Beleg: " + "Sehr langer Lieferantenname GmbH & Co. KG " * 4  # wird gefaltet
+    msg.set_content("Beleg automatisch übermittelt.\nZweite Zeile\n")
+    msg.add_attachment(make_pdf(invoice_lines()), maintype="application", subtype="pdf", filename="rechnung.pdf")
+    wire = to_wire_bytes(msg)
+    assert re.search(rb"(?<!\r)\n", wire) is None, "kein LF ohne vorangehendes CR"
+    assert wire.count(b"\r\n") > 20
