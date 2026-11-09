@@ -40,6 +40,7 @@ def _out(doc: Document, meta: InvoiceMetadata | None, mailbox: str | None, recei
 def list_documents(
     company_id: int | None = Query(default=None),
     status: DocumentStatus | None = Query(default=None),
+    hide_ignored: bool = Query(default=False, description="Ohne Status-Filter: ignorierte Dokumente ausblenden"),
     document_type: DocumentType | None = Query(default=None),
     supplier: str | None = Query(default=None, max_length=200),
     date_from: date | None = Query(default=None, description="Rechnungsdatum ab"),
@@ -63,6 +64,8 @@ def list_documents(
         stmt = stmt.where(Document.company_id.in_(auth.company_ids))
     if status is not None:
         stmt = stmt.where(Document.status == status)
+    elif hide_ignored:
+        stmt = stmt.where(Document.status != DocumentStatus.ignored)
     if document_type is not None:
         stmt = stmt.where(Document.document_type == document_type)
     if supplier:

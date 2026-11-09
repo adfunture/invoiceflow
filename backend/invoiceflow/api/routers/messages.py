@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import Field
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -75,19 +75,49 @@ class MessageResolveIn(StrictInput):
     reason: str = Field(min_length=3, max_length=2000)
 
 
-@router.post("/email-messages/{message_id}/resolve", response_model=EmailMessageDetailOut)
-def resolve_message(message_id: int, body: MessageResolveIn, auth: AuthContext = Depends(require_reviewer),
-                    db: Session = Depends(get_db)) -> EmailMessageDetailOut:
-    """Prüfvermerk für E-Mails (z. B. Rechnungslink manuell heruntergeladen und in DATEV erfasst)."""
+class BulkMessageResolveIn(MessageResolveIn):
+    message_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkMessageResolveOut(BaseModel):
+    resolved: list[int]
+    failed: list[int]
+
+
+def _resolve(db: Session, auth: AuthContext, message_id: int, outcome: str, reason: str) -> None:
     msg = db.scalar(select(EmailMessage).where(EmailMessage.id == message_id).with_for_update())
     if msg is None or not auth.can_access(msg.company_id):
         raise HTTPException(404, "Nicht gefunden")
     if msg.status != EmailMessageStatus.manual_review:
         raise HTTPException(409, "Nur E-Mails in manueller Prüfung können abgeschlossen werden")
     previous_reason = msg.review_reason
-    msg.status = EmailMessageStatus(body.outcome)
-    msg.review_reason = f"Manuell geprüft: {body.reason}"[:4000]
+    msg.status = EmailMessageStatus(outcome)
+    msg.review_reason = f"Manuell geprüft: {reason}"[:4000]
     audit(db, auth.actor, "email_message.resolved", company_id=msg.company_id, entity_type="email_message",
-          entity_id=msg.id, details={"outcome": body.outcome, "reason": body.reason, "previous_reason": previous_reason})
+          entity_id=msg.id, details={"outcome": outcome, "reason": reason, "previous_reason": previous_reason})
+
+
+@router.post("/email-messages/bulk-resolve", response_model=BulkMessageResolveOut)
+def bulk_resolve(body: BulkMessageResolveIn, auth: AuthContext = Depends(require_reviewer),
+                 db: Session = Depends(get_db)) -> BulkMessageResolveOut:
+    """Mehrere E-Mails auf einmal abschließen; nicht abschließbare werden übersprungen."""
+    resolved: list[int] = []
+    failed: list[int] = []
+    for message_id in dict.fromkeys(body.message_ids):
+        try:
+            with db.begin_nested():
+                _resolve(db, auth, message_id, body.outcome, body.reason)
+            resolved.append(message_id)
+        except HTTPException:
+            failed.append(message_id)
+    db.commit()
+    return BulkMessageResolveOut(resolved=resolved, failed=failed)
+
+
+@router.post("/email-messages/{message_id}/resolve", response_model=EmailMessageDetailOut)
+def resolve_message(message_id: int, body: MessageResolveIn, auth: AuthContext = Depends(require_reviewer),
+                    db: Session = Depends(get_db)) -> EmailMessageDetailOut:
+    """Prüfvermerk für E-Mails (z. B. Rechnungslink manuell heruntergeladen und in DATEV erfasst)."""
+    _resolve(db, auth, message_id, body.outcome, body.reason)
     db.commit()
     return get_message(message_id, auth, db)

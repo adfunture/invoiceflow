@@ -45,7 +45,7 @@ from invoiceflow.db.models import (
     InvoiceDuplicate,
     InvoiceMetadata,
 )
-from invoiceflow.mail.mime import _BLOCKED_EXTENSIONS
+from invoiceflow.mail.mime import is_dangerous
 from invoiceflow.recognition import ai as ai_mod
 from invoiceflow.recognition.einvoice import EInvoiceError, parse_einvoice
 from invoiceflow.recognition.model import (
@@ -72,7 +72,6 @@ TERMINAL = {
 # Dokumente, deren Entscheidung als "bereits vorhanden" für die Dublettenprüfung zählt.
 DECIDED = TERMINAL - {DocumentStatus.duplicate, DocumentStatus.error}
 NON_BOOKING = {DocumentType.offer, DocumentType.delivery_note, DocumentType.order_confirmation, DocumentType.other}
-_EXECUTABLE_TYPES = {"application/x-msdownload", "application/x-executable", "application/x-ole-storage"}
 _TYPE_LABELS = {
     DocumentType.offer: "Angebot", DocumentType.delivery_note: "Lieferschein",
     DocumentType.order_confirmation: "Auftragsbestätigung", DocumentType.other: "sonstiges Dokument",
@@ -163,15 +162,11 @@ class DocumentProcessor:
                 ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
                 if att.safety_status in (AttachmentSafety.corrupt, AttachmentSafety.rejected_size):
                     reasons.append(f"Anhang „{name}“: {att.rejection_reason}")
-                elif att.safety_status == AttachmentSafety.rejected_type and (
-                    att.detected_content_type in _EXECUTABLE_TYPES or ext in _BLOCKED_EXTENSIONS
-                ):
+                elif att.safety_status == AttachmentSafety.rejected_type and is_dangerous(att.filename, att.detected_content_type):
                     reasons.append(f"Gefährlicher Anhang „{name}“ blockiert")
                 elif att.safety_status == AttachmentSafety.rejected_type and ext == "zip":
                     reasons.append(f"Anhang „{name}“: {att.rejection_reason}")
-            review_docs = [d for d in docs if d.status == DocumentStatus.manual_review]
-            if review_docs:
-                reasons.append(f"{len(review_docs)} Dokument(e) zur Prüfung")
+            # Dokumente in Prüfung stehen in der Dokumentliste; die E-Mail selbst braucht dafür keinen Prüfvermerk.
             if not docs and (msg.detected_invoice_links or msg.body_mentions_invoice):
                 reasons.append("Kein Rechnungsanhang, aber Rechnungslink/-hinweis im Text – bitte prüfen"
                                + (f" ({len(msg.detected_invoice_links)} Link(s), nicht automatisch abgerufen)"

@@ -28,8 +28,12 @@ export function DocumentsPage() {
   const docs = useInfiniteQuery({
     queryKey: ["documents", companyId, filters],
     initialPageParam: null as number | null,
-    queryFn: ({ pageParam }) =>
-      get<DocumentItem[]>(`/api/documents${query({ company_id: companyId, ...filters, before_id: pageParam, limit: PAGE })}`),
+    queryFn: ({ pageParam }) => {
+      // Standard: ignorierte ausblenden. "all" zeigt wirklich alle.
+      const { status, ...rest } = filters;
+      const statusParams = status === "all" ? {} : status ? { status } : { hide_ignored: true };
+      return get<DocumentItem[]>(`/api/documents${query({ company_id: companyId, ...rest, ...statusParams, before_id: pageParam, limit: PAGE })}`);
+    },
     getNextPageParam: (last) => (last.length === PAGE ? last[last.length - 1].id : null),
   });
   const rows = docs.data?.pages.flat() ?? [];
@@ -41,7 +45,8 @@ export function DocumentsPage() {
         <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label="Status">
             <Select value={filters.status} onChange={(e) => set("status", e.target.value)}>
-              <option value="">Alle</option>
+              <option value="">Alle außer ignorierte</option>
+              <option value="all">Alle (inkl. ignorierte)</option>
               {Object.entries(DOCUMENT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </Select>
           </Field>

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { type DocumentItem, type EmailMessageItem, get, post, query } from "../api";
 import { useApp } from "../app-context";
 import { DocumentTable } from "../components/DocumentTable";
-import { Button, Card, Empty, ErrorBox, Field, Modal, Notice, PageHeader, Select, Spinner, Textarea } from "../components/ui";
+import { Button, Card, Empty, ErrorBox, Field, Modal, Notice, PageHeader, Spinner, Textarea } from "../components/ui";
 import { fmtDateTime } from "../format";
 
 export function ReviewPage() {
@@ -31,11 +31,7 @@ export function ReviewPage() {
             Links werden nie automatisch aufgerufen – bitte nur öffnen, wenn der Absender bekannt ist.
           </p>
           <ErrorBox error={messages.error} />
-          {messages.isLoading ? <Spinner /> : (messages.data ?? []).length === 0 ? <Empty>Keine offenen E-Mails.</Empty> : (
-            <ul className="divide-y divide-slate-100">
-              {messages.data!.map((m) => <MessageRow key={m.id} m={m} />)}
-            </ul>
-          )}
+          {messages.isLoading ? <Spinner /> : <ReviewMessages messages={messages.data ?? []} />}
         </Card>
       </div>
     </>
@@ -101,50 +97,69 @@ function ReviewDocuments({ docs }: { docs: DocumentItem[] }) {
   );
 }
 
-function MessageRow({ m }: { m: EmailMessageItem }) {
+function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
   const { companyName, canReview } = useApp();
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [outcome, setOutcome] = useState<"processed" | "no_invoice">("processed");
-  const [reason, setReason] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const ids = messages.map((m) => m.id).filter((id) => selected.has(id));
+  // Ein Klick genügt: "Erledigt" schließt die E-Mail ab, der Vermerk wird automatisch protokolliert.
   const mutation = useMutation({
-    mutationFn: () => post(`/api/email-messages/${m.id}/resolve`, { outcome, reason }),
+    mutationFn: (messageIds: number[]) =>
+      post("/api/email-messages/bulk-resolve", { message_ids: messageIds, outcome: "no_invoice", reason: "Manuell geprüft" }),
     onSuccess: () => {
-      setOpen(false);
+      setSelected(new Set());
       void qc.invalidateQueries({ queryKey: ["messages"] });
       void qc.invalidateQueries({ queryKey: ["summary"] });
     },
   });
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  if (messages.length === 0) return <Empty>Keine offenen E-Mails.</Empty>;
+
   return (
-    <li className="py-3 text-sm">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="font-medium">{m.subject || "(ohne Betreff)"}</div>
-          <div className="text-slate-500">{m.from_address} · {fmtDateTime(m.received_at)} · {companyName(m.company_id)}</div>
+    <>
+      {canReview && (
+        <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-2 text-slate-600">
+            <input type="checkbox" checked={ids.length === messages.length}
+                   onChange={() => setSelected(ids.length === messages.length ? new Set() : new Set(messages.map((m) => m.id)))} />
+            Alle auswählen
+          </label>
+          <Button disabled={ids.length === 0 || mutation.isPending} onClick={() => mutation.mutate(ids)}>
+            {ids.length > 0 ? `${ids.length} erledigt` : "Erledigt"}
+          </Button>
         </div>
-        {canReview && <Button onClick={() => setOpen(true)}>Erledigt</Button>}
-      </div>
-      {m.review_reason && <div className="mt-2"><Notice tone="warning">{m.review_reason}</Notice></div>}
-      {m.detected_invoice_links.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-xs">
-          {m.detected_invoice_links.map((l) => (
-            <li key={l} className="break-all font-mono text-slate-600">{l}</li>
-          ))}
-        </ul>
       )}
-      <Modal open={open} title="E-Mail als geprüft markieren" onClose={() => setOpen(false)} footer={<>
-        <Button onClick={() => setOpen(false)}>Abbrechen</Button>
-        <Button variant="primary" disabled={reason.trim().length < 3 || mutation.isPending} onClick={() => mutation.mutate()}>Speichern</Button>
-      </>}>
-        <Field label="Ergebnis">
-          <Select value={outcome} onChange={(e) => setOutcome(e.target.value as "processed" | "no_invoice")}>
-            <option value="processed">Rechnung manuell erfasst</option>
-            <option value="no_invoice">Keine Rechnung</option>
-          </Select>
-        </Field>
-        <Field label="Vermerk"><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-        <ErrorBox error={mutation.error} />
-      </Modal>
-    </li>
+      <ErrorBox error={mutation.error} />
+      <ul className="divide-y divide-slate-100">
+        {messages.map((m) => (
+          <li key={m.id} className="flex gap-3 py-3 text-sm">
+            {canReview && <input type="checkbox" className="mt-1" aria-label="Auswählen" checked={selected.has(m.id)}
+                                 onChange={() => toggle(m.id)} />}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-medium">{m.subject || "(ohne Betreff)"}</div>
+                  <div className="text-slate-500">{m.from_address} · {fmtDateTime(m.received_at)} · {companyName(m.company_id)}</div>
+                </div>
+                {canReview && <Button disabled={mutation.isPending} onClick={() => mutation.mutate([m.id])}>Erledigt</Button>}
+              </div>
+              {m.review_reason && <div className="mt-2"><Notice tone="warning">{m.review_reason}</Notice></div>}
+              {m.detected_invoice_links.length > 0 && (
+                <ul className="mt-2 space-y-0.5 text-xs">
+                  {m.detected_invoice_links.map((l) => (
+                    <li key={l} className="break-all font-mono text-slate-600">{l}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }

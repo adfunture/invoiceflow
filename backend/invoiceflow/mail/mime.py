@@ -46,6 +46,21 @@ _BLOCKED_EXTENSIONS = {
 EXECUTABLE_TYPES = {"application/x-msdownload", "application/x-executable", "application/x-ole-storage"}
 # Office-Dateien sind technisch ZIP-Archive (Angebotslisten, Preislisten …), aber nie ein Rechnungsformat.
 _OFFICE_EXTENSIONS = {"xlsx", "docx", "pptx", "ods", "odt", "odp"}
+# Alte Office-Formate (OLE): Listen wie "Sendungsnummern.xls" – kein Rechnungsformat und für uns
+# ungefährlich, weil nie geöffnet. Andere OLE-Dateien (unbekannte Endung) bleiben verdächtig.
+_LEGACY_OFFICE_EXTENSIONS = {"xls", "doc", "ppt"}
+
+
+def _ext(filename: str | None) -> str:
+    return filename.rsplit(".", 1)[1].lower() if filename and "." in filename else ""
+
+
+def is_dangerous(filename: str | None, detected: str | None) -> bool:
+    """Ausführbarer oder makrofähiger Anhang, der als Warnung in die Prüfung gehört."""
+    ext = _ext(filename)
+    if detected == "application/x-ole-storage" and ext in _LEGACY_OFFICE_EXTENSIONS:
+        return False
+    return detected in EXECUTABLE_TYPES or ext in _BLOCKED_EXTENSIONS
 # Outlook benennt eingebettete Bilder (Signatur, Logo, eingefügte Screenshots) image001.png usw.
 _OUTLOOK_EMBEDDED = re.compile(r"^image\d{3}\.(png|jpe?g|gif)$", re.I)
 _INVOICE_WORDS = re.compile(
@@ -80,8 +95,7 @@ class ParsedAttachment:
         if self.safety in (AttachmentSafety.ok, AttachmentSafety.corrupt, AttachmentSafety.rejected_size):
             return True
         if self.safety == AttachmentSafety.rejected_type:
-            ext = self.filename.rsplit(".", 1)[1].lower() if self.filename and "." in self.filename else ""
-            return self.detected_content_type in EXECUTABLE_TYPES or ext in _BLOCKED_EXTENSIONS or ext == "zip"
+            return is_dangerous(self.filename, self.detected_content_type) or _ext(self.filename) == "zip"
         return False
 
 
@@ -168,6 +182,8 @@ def classify_attachment(filename: str | None, data: bytes, max_bytes: int) -> tu
     ext = filename.rsplit(".", 1)[1].lower() if filename and "." in filename else ""
     if ext in _BLOCKED_EXTENSIONS:
         return AttachmentSafety.rejected_type, detected, f"Dateityp .{ext} wird nicht verarbeitet"
+    if detected == "application/x-ole-storage" and ext in _LEGACY_OFFICE_EXTENSIONS:
+        return AttachmentSafety.rejected_type, detected, f"Office-Datei (.{ext}) ist kein Rechnungsformat"
     if detected in EXECUTABLE_TYPES:
         return AttachmentSafety.rejected_type, detected, f"Inhalt ist {detected}"
     if detected == "application/zip":

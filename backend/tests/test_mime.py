@@ -183,3 +183,11 @@ def test_sanitize_filename():
     assert sanitize_filename("C:\\Users\\x\\rechnung.pdf") == "rechnung.pdf"
     assert sanitize_filename("re\x00ch\nnung.pdf") == "rechnung.pdf"
     assert sanitize_filename("   ") is None
+
+
+def test_legacy_excel_is_not_dangerous_but_unknown_ole_is():
+    ole = b"\xd0\xcf\x11\xe0" + b"0" * 50
+    msg = parse(build_email(attachments=[("Sendungsnummern.xls", ole, "application/vnd.ms-excel")]))
+    assert "Office-Datei" in msg.attachments[0].rejection_reason and not msg.needs_processing
+    msg = parse(build_email(attachments=[("rechnung.pdf.bin", ole, "application/octet-stream")]))
+    assert msg.needs_processing  # OLE ohne Office-Endung bleibt verdächtig

@@ -109,3 +109,21 @@ def test_resolve_message_review(admin, monkeypatch):
     body = admin.post(url, json={"outcome": "processed", "reason": "PDF aus Portal geladen und in DATEV erfasst"}).json()
     assert body["status"] == "processed"
     assert admin.post(url, json={"outcome": "processed", "reason": "nochmal"}).status_code == 409
+
+
+def test_bulk_resolve_messages(admin, monkeypatch):
+    from .test_pipeline import deliver, messages, process
+
+    monkeypatch.setenv("INVOICEFLOW_SECRET_IMAP_ADFUNTURE_INFO", "richtig")
+    with get_sessionmaker()() as s:
+        s.execute(update(Mailbox).where(Mailbox.email_address == INFO).values(is_active=True))
+        s.commit()
+    accounts = {INFO: FakeAccount(), "invoice@adfunture.de": FakeAccount()}
+    deliver(accounts, [], body="Rechnung: https://portal.example.com/invoice/1")
+    deliver(accounts, [], body="Rechnung: https://portal.example.com/invoice/2")
+    process(accounts)
+    ids = [m.id for m in messages()]
+    body = admin.post("/api/email-messages/bulk-resolve",
+                      json={"message_ids": [*ids, 999_999], "outcome": "no_invoice", "reason": "Manuell geprüft"}).json()
+    assert sorted(body["resolved"]) == sorted(ids) and body["failed"] == [999_999]
+    assert {m.status for m in messages()} == {"no_invoice"}

@@ -122,6 +122,8 @@ def test_bulk_ignore_skips_released_and_foreign(admin, accounts):
     assert body["ignored"] == [held1.id, held2.id]
     assert {f["document_id"] for f in body["failed"]} == {released.id, 999_999}
     assert admin.get("/api/documents", params={"status": "ignored"}).json().__len__() == 2
+    assert [d["id"] for d in admin.get("/api/documents", params={"hide_ignored": "true"}).json()] == [released.id]
+    assert len(admin.get("/api/documents").json()) == 3
     logs = admin.get("/api/audit-logs", params={"entity_type": "document"}).json()
     assert [entry["action"] for entry in logs].count("document.review.ignore") == 2
 
