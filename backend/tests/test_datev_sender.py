@@ -514,3 +514,51 @@ def test_wire_bytes_use_crlf_everywhere():
     wire = to_wire_bytes(msg)
     assert re.search(rb"(?<!\r)\n", wire) is None, "kein LF ohne vorangehendes CR"
     assert wire.count(b"\r\n") > 20
+
+
+def _datev_reply(in_reply_to: str, body: str) -> bytes:
+    reply = EmailMessage()
+    reply["From"] = "noreply@uploadmail.datev.de"
+    reply["To"] = INFO
+    reply["Subject"] = "AW: Beleg: Müller Outdoor Handel GmbH RE-2026-1001"
+    reply["Message-ID"] = f"<reply-{abs(hash(body))}@uploadmail.datev.de>"
+    reply["In-Reply-To"] = in_reply_to
+    reply["References"] = in_reply_to
+    reply.set_content(body)
+    return reply.as_bytes()
+
+
+def test_datev_receipt_confirms_transmission_and_is_not_imported(accounts, monkeypatch):
+    from .test_imap_sync import ON_START, sync
+    from .test_pipeline import messages
+
+    configure_destination(monkeypatch)
+    ready_invoice(accounts)
+    transport = FakeTransport()
+    sender(transport).run_cycle()
+    t, = transmissions()
+    assert t.status == TransmissionStatus.sent_unconfirmed
+    message_id = transport.sent[0][0]["Message-ID"]
+    before = len(messages())
+    body = ("Ihr Beleg ist bei DATEV eingegangen. Belege ansehen: "
+            "https://duo.apps.datev.de/v1/targets/upload-mail-documents-start?consultantNr=1&clientNr=2\n"
+            "Bei Fehlern wenden Sie sich an den Servicekontakt: https://go.datev.de/servicekontakt-online-uploadmail\n")
+    accounts[INFO].deliver(_datev_reply(message_id, body), ON_START + timedelta(hours=40))
+    sync(accounts)
+    assert transmissions()[0].status == TransmissionStatus.confirmed
+    assert len(messages()) == before, "DATEV-Quittung landet nicht in der Prüfung"
+
+
+def test_datev_problem_reply_goes_to_transmission_review(accounts, monkeypatch):
+    from .test_imap_sync import ON_START, sync
+
+    configure_destination(monkeypatch)
+    ready_invoice(accounts)
+    transport = FakeTransport()
+    sender(transport).run_cycle()
+    message_id = transport.sent[0][0]["Message-ID"]
+    accounts[INFO].deliver(_datev_reply(message_id, "Der Beleg konnte nicht verarbeitet werden: Dateiformat ungültig."),
+                           ON_START + timedelta(hours=40))
+    sync(accounts)
+    t, = transmissions()
+    assert t.status == TransmissionStatus.manual_review and "DATEV meldet ein Problem" in t.last_error

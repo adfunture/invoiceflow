@@ -30,6 +30,7 @@ from invoiceflow.config import Settings
 from invoiceflow.db.enums import AttachmentSafety, EmailMessageStatus, JobType
 from invoiceflow.db.models import Company, EmailAttachment, EmailMessage, Mailbox, MailboxSyncState
 from invoiceflow.logging_setup import redact_text
+from invoiceflow.datev.feedback import apply_datev_reply, is_datev_reply
 from invoiceflow.mail.folders import exclusion_reason
 from invoiceflow.mail.imap import ConnectionParams, MailServer, MailServerError, MailServerFactory, MessageMeta
 from invoiceflow.mail.mime import ParsedMessage, parse_message
@@ -58,7 +59,7 @@ class FolderResult:
     imported: int = 0
     already_known: int = 0
     before_start: int = 0
-    irrelevant: int = 0  # ohne Anhang und ohne Rechnungslink, nicht importiert
+    irrelevant: int = 0  # ohne Anhang und Rechnungslink oder DATEV-Quittung, nicht importiert
     uidvalidity_changed: bool = False
 
 
@@ -382,6 +383,14 @@ class MailboxSyncer:
                 parsed = parse_message(raw, max_attachment_bytes=max_attachment)
             except Exception as exc:  # noqa: BLE001 – kaputte Nachricht: Original bleibt gespeichert, Prüfung manuell
                 values.update(status=EmailMessageStatus.error, review_reason=f"MIME nicht lesbar: {type(exc).__name__}")
+            if parsed is not None and is_datev_reply(parsed):
+                # Eingangsbestätigung von DATEV Upload Mail: verbuchen statt importieren.
+                with self.sessions() as db:
+                    handled = apply_datev_reply(db, parsed, mailbox.company_id, self.actor)
+                    self._advance(state_id, meta.uid, db)
+                    db.commit()
+                log.info("datev_reply_processed", extra={"mailbox_id": mailbox.id, "transmissions": handled})
+                return "irrelevant"
             if parsed is not None and not parsed.needs_processing:
                 # Weder Anhang noch Rechnungslink: keine Rechnungspost, wird weder gespeichert noch angezeigt.
                 self._advance(state_id, meta.uid)

@@ -111,6 +111,7 @@ class ParsedMessage:
     invoice_links: list[str] = field(default_factory=list)
     body_mentions_invoice: bool = False
     parse_warnings: list[str] = field(default_factory=list)
+    reply_references: list[str] = field(default_factory=list)  # In-Reply-To und References
 
     @property
     def needs_processing(self) -> bool:
@@ -356,4 +357,6 @@ def parse_message(raw: bytes, *, max_attachment_bytes: int) -> ParsedMessage:
         invoice_links=_invoice_links(urls, full_text + " " + (subject or "")),
         body_mentions_invoice=bool(_INVOICE_WORDS.search(full_text + " " + (subject or ""))),
         parse_warnings=warnings,
+        reply_references=re.findall(r"<[^<>\s]+>", " ".join(
+            v for v in (_decode_header(msg, "In-Reply-To"), _decode_header(msg, "References")) if v))[:50],
     )
