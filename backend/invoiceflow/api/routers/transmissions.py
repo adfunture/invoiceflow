@@ -22,7 +22,7 @@ from invoiceflow.config import Settings, get_settings
 from invoiceflow.datev import operations as ops
 from invoiceflow.datev.xml_channel import XmlChannelUnavailable, get_xml_channel
 from invoiceflow.db.enums import DocumentStatus, TransmissionStatus, UserRole
-from invoiceflow.db.models import DatevTransmission, DatevTransmissionAttempt, Document
+from invoiceflow.db.models import DatevTransmission, DatevTransmissionAttempt, Document, InvoiceMetadata
 from invoiceflow.services.audit import audit
 from invoiceflow.storage import StorageError, get_store
 
@@ -56,7 +56,7 @@ def list_transmissions(
     limit: int = Query(default=100, ge=1, le=500),
     auth: AuthContext = Depends(require_viewer),
     db: Session = Depends(get_db),
-) -> list[DatevTransmission]:
+) -> list[TransmissionOut]:
     stmt = select(DatevTransmission).order_by(DatevTransmission.id.desc()).limit(limit)
     if company_id is not None:
         ensure_company(auth, company_id)
@@ -69,7 +69,16 @@ def list_transmissions(
         stmt = stmt.where(DatevTransmission.test_mode.is_(False))
     if document_id is not None:
         stmt = stmt.where(DatevTransmission.document_id == document_id)
-    return list(db.scalars(stmt))
+    rows = list(db.execute(
+        stmt.add_columns(InvoiceMetadata.supplier_name, InvoiceMetadata.invoice_number, Document.original_filename)
+        .join(Document, Document.id == DatevTransmission.document_id)
+        .outerjoin(InvoiceMetadata, InvoiceMetadata.document_id == DatevTransmission.document_id)))
+    out = []
+    for t, supplier, number, filename in rows:
+        item = TransmissionOut.model_validate(t)
+        item.supplier_name, item.invoice_number, item.original_filename = supplier, number, filename
+        out.append(item)
+    return out
 
 
 @router.get("/transmissions/{transmission_id}", response_model=TransmissionDetailOut)

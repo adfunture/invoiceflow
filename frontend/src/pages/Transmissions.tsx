@@ -80,7 +80,7 @@ export function TransmissionsPage() {
             ...(canReview ? [<input key="all" type="checkbox" aria-label="Alle gesendeten auswählen" checked={allSelected}
                                     disabled={confirmable.length === 0}
                                     onChange={() => setSelected(allSelected ? new Set() : new Set(confirmable.map((t) => t.id)))} />] : []),
-            "#", "Unternehmen", "Beleg", "Status", "Art", "Versuche", "Gesendet", "Hinweis", "",
+            "#", "Unternehmen", "Lieferant", "Status", "Art", "Versuche", "Gesendet", "Hinweis", "",
           ]}>
             {list.data!.map((t) => (
               <tr key={t.id} className={selected.has(t.id) ? "bg-brand-50" : "hover:bg-slate-50"}>
@@ -93,7 +93,12 @@ export function TransmissionsPage() {
                 )}
                 <td className={`${td} num text-slate-500`}>{t.id}</td>
                 <td className={td}>{companyName(t.company_id)}</td>
-                <td className={td}><Link className="text-brand-700 hover:underline" to={`/documents/${t.document_id}`}>Dokument {t.document_id}</Link></td>
+                <td className={td}>
+                  <Link className="font-medium text-brand-700 hover:underline" to={`/documents/${t.document_id}`}>
+                    {t.supplier_name ?? t.original_filename ?? `Dokument ${t.document_id}`}
+                  </Link>
+                  {t.invoice_number && <div className="text-xs text-slate-500">Nr. {t.invoice_number}</div>}
+                </td>
                 <td className={td}><StatusBadge map={TRANSMISSION_STATUS} value={t.status} /></td>
                 <td className={td}>{SEND_MODE[t.send_mode] ?? t.send_mode}{t.test_mode && <> <Badge tone="info">Test</Badge></>}</td>
                 <td className={`${td} num`}>{t.attempts}/{t.max_attempts}</td>

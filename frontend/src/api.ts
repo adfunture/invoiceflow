@@ -219,6 +219,9 @@ export interface Transmission {
   confirmed_by: number | null;
   requested_by: number | null;
   requested_at: string | null;
+  supplier_name?: string | null;
+  invoice_number?: string | null;
+  original_filename?: string | null;
   created_at: string;
 }
 

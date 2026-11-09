@@ -449,6 +449,10 @@ class TransmissionOut(Output):
     requested_by: int | None
     requested_at: datetime | None
     created_at: datetime
+    # Aus Dokument/Rechnungsdaten, damit die Liste den Absender der Rechnung zeigt.
+    supplier_name: str | None = None
+    invoice_number: str | None = None
+    original_filename: str | None = None
 
 
 class TransmissionDetailOut(TransmissionOut):
@@ -460,12 +464,12 @@ class SendRequestIn(StrictInput):
 
 
 class NoteIn(StrictInput):
-    note: str = Field(min_length=3, max_length=2000)
+    note: str = Field(min_length=1, max_length=2000)
 
 
 class ResolveIn(StrictInput):
     was_sent: bool
-    reason: str = Field(min_length=3, max_length=2000)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class DryRunOut(BaseModel):

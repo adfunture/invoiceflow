@@ -21,6 +21,7 @@ def test_transmission_log_and_confirm(admin, accounts, monkeypatch):
     sender(FakeTransport()).run_cycle()
     t, = admin.get("/api/datev/transmissions").json()
     assert t["status"] == "sent_unconfirmed" and t["destination_address"] == TARGET
+    assert t["supplier_name"] and t["invoice_number"]  # Absender der Rechnung in der Liste
     detail = admin.get(f"/api/datev/transmissions/{t['id']}").json()
     assert detail["attempts_log"][0]["outcome"] == "accepted"
     confirmed = admin.post(f"/api/datev/transmissions/{t['id']}/confirm", json={"note": "In DATEV sichtbar"})

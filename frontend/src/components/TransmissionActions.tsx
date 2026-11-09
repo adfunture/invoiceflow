@@ -6,6 +6,13 @@ import { Button, ErrorBox, Field, Modal, Notice, Textarea } from "./ui";
 
 type Action = "send" | "test_delivery" | "confirm" | "resolve_sent" | "resolve_not_sent";
 
+// Vorausgefüllter Vermerk; bleibt das Feld leer, wird er trotzdem protokolliert.
+const DEFAULT_NOTE: Partial<Record<Action, string>> = {
+  confirm: "In DATEV geprüft",
+  resolve_sent: "In DATEV vorhanden",
+  resolve_not_sent: "In DATEV nicht vorhanden",
+};
+
 const TEXT: Record<Action, { title: string; button: string; info: string }> = {
   send: { title: "Beleg an DATEV senden", button: "Jetzt senden",
     info: "Der DATEV-Worker sendet den Beleg beim nächsten Durchlauf. Voraussetzung: Produktivfreigabe, Testmodus aus." },
@@ -26,9 +33,10 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
   const mutation = useMutation({
     mutationFn: async (a: Action) => {
       const base = `/api/datev/transmissions/${t.id}`;
+      const text = note.trim() || DEFAULT_NOTE[a] || "";
       if (a === "send" || a === "test_delivery") return post(`${base}/send`, { mode: a === "send" ? "manual" : "test_delivery" });
-      if (a === "confirm") return post(`${base}/confirm`, { note });
-      return post(`${base}/resolve`, { was_sent: a === "resolve_sent", reason: note });
+      if (a === "confirm") return post(`${base}/confirm`, { note: text });
+      return post(`${base}/resolve`, { was_sent: a === "resolve_sent", reason: text });
     },
     onSuccess: () => {
       setAction(null);
@@ -51,7 +59,7 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
       <div className="flex flex-wrap gap-2">
         {buttons.map((b) => (
           <Button key={b} variant={b === "resolve_not_sent" ? "secondary" : b === "confirm" || b === "send" ? "primary" : "secondary"}
-            onClick={() => { mutation.reset(); setAction(b); }}>
+            onClick={() => { mutation.reset(); setNote(DEFAULT_NOTE[b] ?? ""); setAction(b); }}>
             {TEXT[b].button}
           </Button>
         ))}
@@ -59,13 +67,13 @@ export function TransmissionActions({ t, onDone }: { t: Transmission; onDone: ()
       {action && (
         <Modal open title={TEXT[action].title} onClose={() => setAction(null)} footer={<>
           <Button onClick={() => setAction(null)}>Abbrechen</Button>
-          <Button variant="primary" disabled={mutation.isPending || (needsNote && note.trim().length < 3)}
+          <Button variant="primary" disabled={mutation.isPending}
             onClick={() => mutation.mutate(action)}>{TEXT[action].button}</Button>
         </>}>
           <Notice tone={action === "test_delivery" || action === "resolve_not_sent" ? "warning" : "info"}>{TEXT[action].info}</Notice>
           <p className="text-sm text-slate-600">Ziel: <b>{t.destination_address ?? "aus DATEV-Einstellungen"}</b></p>
           {needsNote && (
-            <Field label="Vermerk (wird protokolliert)">
+            <Field label="Vermerk (optional, wird protokolliert)">
               <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
             </Field>
           )}
