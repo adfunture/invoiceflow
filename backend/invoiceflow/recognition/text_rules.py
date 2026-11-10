@@ -288,10 +288,32 @@ def own_vat_as_sender(text: str, own_vat_ids: list[str], own_aliases: list[str] 
     if not own:
         return None
     recipient_lines = _recipient_block(text, own_aliases or [])
-    for i, line in enumerate(text.splitlines()):
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         if _CUSTOMER_VAT_CONTEXT.search(line) or i in recipient_lines:
             continue
         for m in _VAT_ID.finditer(line):
-            if (vat := normalize_vat_id(m.group(1))) in own:
+            if (vat := normalize_vat_id(m.group(1))) in own and not _label_above_is_customer(lines, i, m.start()):
                 return vat
     return None
+
+
+_CELL_SPLIT = re.compile(r"\s{2,}")
+
+
+def _label_above_is_customer(lines: list[str], i: int, pos: int) -> bool:
+    """Tabellen mit Bezeichnung über dem Wert ("Ihre USt-ID-Nr.  Unsere USt-ID" / "DE…  DE…"):
+    Die Bezeichnung derselben Spalte in der Zeile darüber entscheidet, wessen USt-ID es ist."""
+    above = next((lines[j] for j in range(i - 1, max(-1, i - 3), -1) if lines[j].strip()), "")
+    if not above:
+        return False
+    cells, labels = _CELL_SPLIT.split(lines[i].strip()), _CELL_SPLIT.split(above.strip())
+    if len(cells) == len(labels) and len(cells) > 1:
+        before = lines[i][:pos].strip()
+        column = len(_CELL_SPLIT.split(before)) if before else 0
+        return bool(_CUSTOMER_VAT_CONTEXT.search(labels[min(column, len(labels) - 1)]))
+    # Spalten nicht eindeutig zuordenbar: nur wenn die Zeile darüber eine reine Kunden-Bezeichnung ist.
+    return bool(_CUSTOMER_VAT_CONTEXT.search(above)) and not _OWN_VAT_LABEL.search(above)
+
+
+_OWN_VAT_LABEL = re.compile(r"\b(unsere|our|seller|verkäufer)\b", re.I)

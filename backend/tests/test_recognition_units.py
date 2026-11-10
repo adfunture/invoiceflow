@@ -315,3 +315,22 @@ def test_missing_vat_note_recognises_foreign_and_reverse_charge(text, expected):
     inv.document_type, inv.confidence, inv.is_correction = classify(text)
     extract_fields(text, inv, ADF, [])
     assert any(expected in w for w in inv.warnings), inv.warnings
+
+
+_THULE = [
+    (40, 780, "Thule GmbH"), (300, 780, "RECHNUNG"),
+    (40, 700, "Adfunture Outdoor GmbH"), (40, 688, "Hochstrasse 7"), (40, 676, "88131 Bodolz"),
+    (40, 590, "Ihre USt-ID-Nr."), (170, 590, "Unsere USt-ID"),
+    (40, 578, "DE261579742"), (170, 578, "DE133540644"),
+    (40, 100, "Thule GmbH, Postfach 1467, 89304 Neumarkt"),
+]
+
+
+def test_own_vat_below_customer_label_in_table_is_not_outgoing_invoice():
+    """Thule-Layout: Bezeichnungen stehen über den Werten. "Ihre USt-ID-Nr." gehört zur eigenen USt-ID."""
+    text = analyze_pdf(make_pdf([], positioned=_THULE)).text
+    assert own_vat_as_sender(text, ["DE261579742"], ADF) is None
+    # Spalten vertauscht: eigene USt-ID unter "Unsere USt-ID" → weiterhin verdächtig
+    swapped = [(x, y, {"DE261579742": "DE133540644", "DE133540644": "DE261579742"}.get(t, t)) for x, y, t in _THULE]
+    text = analyze_pdf(make_pdf([], positioned=swapped)).text
+    assert own_vat_as_sender(text, ["DE261579742"], ADF) == "DE261579742"
