@@ -17,8 +17,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Tesseract für lokale OCR von Scan-PDFs (Daten verlassen den Container nicht) und
-# PostgreSQL-17-Client aus dem offiziellen PGDG-Repository für pg_dump/pg_restore
-# (Debian liefert nur Version 15, die neuere Railway-Server nicht sichern kann).
+# PostgreSQL-18-Client aus dem offiziellen PGDG-Repository für pg_dump/pg_restore
+# (Debian liefert nur Version 15). Die Major-Version muss >= der des Railway-Servers sein
+# (aktuell 18.x), sonst bricht pg_dump mit "server version mismatch" ab.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gnupg tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
     && install -d /usr/share/postgresql-common/pgdg \
@@ -27,7 +28,7 @@ RUN apt-get update \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
     && apt-get purge -y curl gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
