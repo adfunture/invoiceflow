@@ -372,11 +372,16 @@ def test_monitor_alerts_on_failed_or_stale_backup():
     with get_sessionmaker()() as db:
         findings = {f.key: f for f in collect_findings(db, prod, now)}
         assert findings["ops:backup"].severity == "critical" and "noch nie" in findings["ops:backup"].message
-        assert findings["ops:restore_check"].severity == "warning"
+        # Ohne Backup ist der Wiederherstellungstest noch nicht fällig.
+        assert "ops:restore_check" not in findings
         # Testumgebung: ohne Läufe kein Alarm
         assert "ops:backup" not in {f.key for f in collect_findings(db, SETTINGS, now)}
 
         audit(db, ACTOR, "ops.backup_completed", details={})
+        db.commit()
+        assert "ops:restore_check" not in {f.key for f in collect_findings(db, prod, now)}
+        overdue = {f.key: f for f in collect_findings(db, prod, now + timedelta(days=9))}
+        assert overdue["ops:restore_check"].severity == "warning" and "noch nie" in overdue["ops:restore_check"].message
         audit(db, ACTOR, "ops.restore_check_passed", details={})
         db.commit()
         keys = {f.key for f in collect_findings(db, prod, now)}

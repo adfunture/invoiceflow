@@ -16,7 +16,7 @@ from invoiceflow import jobs
 from invoiceflow.db.enums import JobType
 from invoiceflow.logging_setup import redact_text
 from invoiceflow.recognition.pipeline import DocumentProcessor
-from invoiceflow.workers.base import StopSignal, heartbeat, make_worker_id
+from invoiceflow.workers.base import StopSignal, heartbeat, make_worker_id, remove_heartbeat
 
 log = logging.getLogger("invoiceflow.worker.processing")
 LEASE_SECONDS = 600
@@ -63,4 +63,5 @@ def run_forever(processor: DocumentProcessor, sessions: sessionmaker[Session]) -
         except Exception:  # noqa: BLE001
             log.exception("worker_tick_failed", extra={"worker_id": worker_id})
             stop.wait(IDLE_SECONDS)
+    remove_heartbeat(sessions, worker_id)
     log.info("worker_stopped", extra={"worker_id": worker_id})

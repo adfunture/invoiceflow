@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 
 from invoiceflow.api.routers.mailboxes import get_mail_server_factory
 from invoiceflow.db.enums import UserRole
-from invoiceflow.db.models import Mailbox
+from invoiceflow.db.models import Mailbox, WorkerHeartbeat
 from invoiceflow.db.session import get_sessionmaker
 from invoiceflow.workers.base import heartbeat
 
@@ -85,13 +85,12 @@ def test_message_list_is_company_scoped(admin, monkeypatch):
 def test_workers_endpoint_marks_stale(admin):
     with get_sessionmaker()() as s:
         heartbeat(s, "imap:a:1", "imap", datetime.now(UTC), {})
-        heartbeat(s, "imap:b:2", "imap", datetime.now(UTC), {})
-        from invoiceflow.db.models import WorkerHeartbeat
-        s.execute(update(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == "imap:b:2")
+        heartbeat(s, "datev:b:2", "datev", datetime.now(UTC), {})
+        s.execute(update(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == "datev:b:2")
                   .values(last_beat_at=datetime.now(UTC) - timedelta(minutes=10)))
         s.commit()
     workers = {w["worker_id"]: w["stale"] for w in admin.get("/api/workers").json()}
-    assert workers == {"imap:a:1": False, "imap:b:2": True}
+    assert workers == {"imap:a:1": False, "datev:b:2": True}
 
 
 def test_resolve_message_review(admin, monkeypatch):
@@ -187,3 +186,24 @@ def test_attachment_only_mode_keeps_mails_with_documents_open(admin, monkeypatch
     with get_sessionmaker()() as s:
         assert app_settings.get_setting(s, "mail.attachment_only_senders") == ["service@paypal.de"]
         assert app_settings.get_setting(s, "mail.blocked_senders") == []
+
+
+def test_workers_list_hides_replaced_workers(admin):
+    from invoiceflow.workers.base import remove_heartbeat
+
+    now = datetime.now(UTC)
+    with get_sessionmaker()() as s:
+        heartbeat(s, "datev:old:1", "datev", now - timedelta(hours=3), {})
+        s.execute(update(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == "datev:old:1")
+                  .values(last_beat_at=now - timedelta(hours=2)))
+        s.commit()
+        heartbeat(s, "datev:new:1", "datev", now, {})
+        heartbeat(s, "imap:dead:1", "imap", now - timedelta(hours=3), {})
+        s.execute(update(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == "imap:dead:1")
+                  .values(last_beat_at=now - timedelta(hours=1)))
+        s.commit()
+    workers = {w["worker_id"]: w for w in admin.get("/api/workers").json()}
+    assert "datev:new:1" in workers and "datev:old:1" not in workers
+    assert workers["imap:dead:1"]["stale"] is True  # einziger imap-Worker und stumm: bleibt sichtbar
+    remove_heartbeat(get_sessionmaker(), "datev:new:1")
+    assert "datev:new:1" not in {w["worker_id"] for w in admin.get("/api/workers").json()}

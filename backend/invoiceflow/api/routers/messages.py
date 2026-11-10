@@ -64,9 +64,15 @@ def list_workers(auth: AuthContext = Depends(require_viewer), db: Session = Depe
     rows = db.scalars(select(WorkerHeartbeat).where(WorkerHeartbeat.last_beat_at > now - timedelta(days=1))
                       .order_by(WorkerHeartbeat.worker_type, WorkerHeartbeat.last_beat_at.desc()))
     result = []
-    for row in rows:
+    newest_seen: set[str] = set()
+    for row in rows:  # je Typ neueste zuerst
         out = WorkerOut.model_validate(row)
         out.stale = row.last_beat_at < now - STALE_AFTER
+        # Ein stummer Worker ist nur interessant, wenn er der neueste seines Typs ist; ältere stumme Einträge
+        # stammen von abgelösten Deploys (oder Abstürzen, die ein neuerer Worker bereits ersetzt hat).
+        if out.stale and row.worker_type in newest_seen:
+            continue
+        newest_seen.add(row.worker_type)
         result.append(out)
     return result
 

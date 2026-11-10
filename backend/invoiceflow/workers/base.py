@@ -11,8 +11,9 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from invoiceflow.db.models import WorkerHeartbeat
 
@@ -56,6 +57,19 @@ def heartbeat(db: Session, worker_id: str, worker_type: str, started_at: datetim
         set_={"last_beat_at": now, "details": stmt.excluded.details},
     ))
     db.commit()
+
+
+def remove_heartbeat(sessions: sessionmaker[Session], worker_id: str) -> None:
+    """Sauber beendeter Worker (z. B. Ablösung durch einen neuen Deploy) verschwindet aus der Übersicht.
+
+    Abgestürzte Worker behalten ihren Eintrag – deren fehlende Rückmeldung soll auffallen.
+    """
+    try:
+        with sessions() as db:
+            db.execute(delete(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == worker_id))
+            db.commit()
+    except Exception:  # noqa: BLE001 – beim Herunterfahren nicht mehr wichtig
+        pass
 
 
 class StopSignal:

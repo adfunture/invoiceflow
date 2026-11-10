@@ -19,7 +19,7 @@ from invoiceflow.db.models import Mailbox
 from invoiceflow.mail.imap import MailServerFactory, default_factory
 from invoiceflow.mail.sync import MailboxSyncer
 from invoiceflow.storage import DocumentStore
-from invoiceflow.workers.base import StopSignal, heartbeat, make_worker_id
+from invoiceflow.workers.base import StopSignal, heartbeat, make_worker_id, remove_heartbeat
 
 log = logging.getLogger("invoiceflow.worker.imap")
 TICK_SECONDS = 15
@@ -67,4 +67,5 @@ def run_forever(sessions: sessionmaker[Session], store: DocumentStore, settings:
         except Exception:  # noqa: BLE001 – z. B. DB kurz weg: weiterlaufen, Railway-Restart nicht nötig
             log.exception("worker_tick_failed", extra={"worker_id": worker_id})
         stop.wait(TICK_SECONDS)
+    remove_heartbeat(sessions, worker_id)
     log.info("worker_stopped", extra={"worker_id": worker_id})

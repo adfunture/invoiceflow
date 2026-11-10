@@ -83,8 +83,7 @@ export function DashboardPage() {
                       <WorkerEnv env={w.details.env as WorkerEnvInfo | undefined} type={w.worker_type} />
                     </span>
                     <span className={w.stale ? "text-rose-700" : "text-slate-500"}>
-                      {w.stale ? "keine Rückmeldung seit " : `aktiv seit ${fmtDateTime(w.started_at)} · `}
-                      {w.stale && fmtDateTime(w.last_beat_at)}
+                      {w.stale ? `keine Rückmeldung seit ${fmtDateTime(w.last_beat_at)}` : `aktiv seit ${fmtDateTime(w.started_at)}`}
                     </span>
                   </li>
                 ))}

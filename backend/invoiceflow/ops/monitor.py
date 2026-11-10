@@ -57,6 +57,8 @@ class OpsJob:
     failed_action: str
     max_age: timedelta
     never_ran_severity: str = "critical"
+    # Erst fällig, wenn diese Aktion (z. B. das erste Backup) länger als max_age zurückliegt.
+    due_after: str | None = None
 
 
 OPS_JOBS = (
@@ -64,7 +66,7 @@ OPS_JOBS = (
     OpsJob("ops:backup", "Datenbank-Backup", "ops.backup_completed", "ops.backup_failed", timedelta(hours=26)),
     # Wiederherstellungstest läuft wöchentlich (sonntags).
     OpsJob("ops:restore_check", "Wiederherstellungstest", "ops.restore_check_passed", "ops.restore_check_failed",
-           timedelta(days=8), never_ran_severity="warning"),
+           timedelta(days=8), never_ran_severity="warning", due_after="ops.backup_completed"),
 )
 
 
@@ -103,6 +105,11 @@ def _ops_findings(db: Session, settings: Settings, now: datetime) -> list[Findin
                           .where(AuditLog.action.in_((job.ok_action, job.failed_action)))
                           .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc()).limit(1)).first()
         if last is None:
+            if job.due_after:
+                # Ohne (ausreichend altes) Backup gibt es nichts wiederherzustellen – noch nicht fällig.
+                first = db.scalar(select(func.min(AuditLog.occurred_at)).where(AuditLog.action == job.due_after))
+                if first is None or first > now - job.max_age:
+                    continue
             # Außerhalb der Produktion laufen die Crons nicht – dort kein Alarm für "nie gelaufen".
             if settings.is_production:
                 findings.append(Finding(job.key, job.never_ran_severity, f"{job.label} ist noch nie gelaufen"))

@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime
 
 from invoiceflow.datev.sender import DatevSender
-from invoiceflow.workers.base import StopSignal, heartbeat
+from invoiceflow.workers.base import StopSignal, heartbeat, remove_heartbeat
 
 log = logging.getLogger("invoiceflow.worker.datev")
 TICK_SECONDS = 30
@@ -32,4 +32,5 @@ def run_forever(sender: DatevSender) -> None:
         except Exception:  # noqa: BLE001 – Worker läuft weiter; einzelne Übertragungen sind abgesichert
             log.exception("worker_tick_failed", extra={"worker_id": sender.worker_id})
         stop.wait(TICK_SECONDS)
+    remove_heartbeat(sender.sessions, sender.worker_id)
     log.info("worker_stopped", extra={"worker_id": sender.worker_id})
