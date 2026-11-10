@@ -145,3 +145,46 @@ def test_review_permissions_and_isolation(accounts):
     assert bulk["ignored"] == [] and bulk["failed"][0]["error"] == "Nicht gefunden"
     assert viewer.post("/api/documents/bulk-ignore", json={"document_ids": [doc.id], "reason": "abc"}).status_code == 403
     assert sbc.get("/api/documents", params={"company_id": company_id("adfunture")}).status_code == 404
+
+
+def test_reprocess_reruns_recognition_with_ai(admin, accounts):
+    """Beleg landete ohne KI in der Prüfung; nach „Neu erkennen“ wertet der Worker ihn mit KI aus."""
+    from invoiceflow.db.session import get_sessionmaker
+    from invoiceflow.recognition import ai as ai_mod
+    from invoiceflow.workers.processing_worker import run_once
+
+    from .test_pipeline import UNCLEAR, FakeAi, _enable_ai, pdf_att, processor
+
+    (doc, _), = _setup(accounts, pdf_att(UNCLEAR))
+    assert doc.status == "manual_review"
+    _enable_ai()
+    body = admin.post(f"/api/documents/{doc.id}/reprocess").json()
+    assert body["status"] == "pending" and body["review_reason"] is None
+    ai = FakeAi(ai_mod.AiInvoiceFields(document_type="invoice", confidence=0.95, invoice_number="2026/55",
+                                       invoice_date="2026-11-09", gross_amount="119.00", currency="EUR",
+                                       supplier_name="Lieferant Beispiel GmbH"))
+    assert run_once(processor(ai=ai), get_sessionmaker(), "test-processing") == 1
+    assert ai.calls == 1
+    detail = admin.get(f"/api/documents/{doc.id}").json()
+    assert detail["status"] == "ready_for_datev", detail["review_reason"]
+    assert detail["invoice"]["invoice_number"] == "2026/55"
+    log = admin.get("/api/audit-logs", params={"entity_type": "document"}).json()[0]
+    assert log["action"] == "document.reprocess_requested" and log["details"]["previous_status"] == "manual_review"
+
+
+def test_reprocess_refuses_decided_documents_and_foreign_companies(admin, accounts):
+    (doc, _), = _setup(accounts, ("r.pdf", make_pdf(["Lieferant GmbH", "Rechnung"]), PDF))
+    assert admin.post(f"/api/documents/{doc.id}/review", json={"decision": "ignore", "reason": "kein Beleg"}).status_code == 200
+    response = admin.post(f"/api/documents/{doc.id}/reprocess")
+    assert response.status_code == 409
+    (ready, _), = [(d, m) for d, m in _setup(accounts, ("a.pdf", make_pdf(invoice_lines("RE-77")), PDF))
+                   if d.status == "ready_for_datev"]
+    assert admin.post(f"/api/documents/{ready.id}/reprocess").status_code == 409
+    make_user("viewer2@adfunture.de", UserRole.viewer, ("adfunture",))
+    viewer = ApiClient()
+    viewer.login("viewer2@adfunture.de")
+    assert viewer.post(f"/api/documents/{doc.id}/reprocess").status_code == 403
+    make_user("pruefer2@sbc-symbio.de", UserRole.reviewer, ("sbc",))
+    sbc = ApiClient()
+    sbc.login("pruefer2@sbc-symbio.de")
+    assert sbc.post(f"/api/documents/{doc.id}/reprocess").status_code == 404

@@ -12,6 +12,9 @@ import {
 } from "../format";
 
 const REVIEWABLE = new Set(["manual_review", "duplicate", "ignored"]);
+// Nur maschinell in die Prüfung gelangte Belege; bewusste Entscheidungen bleiben unangetastet.
+const REPROCESSABLE = new Set(["manual_review", "error"]);
+const IN_PROGRESS = new Set(["pending", "processing"]);
 
 function Source({ doc, field }: { doc: DocumentDetail; field: string }) {
   const src = doc.invoice?.field_sources?.[field];
@@ -23,7 +26,12 @@ export function DocumentDetailPage() {
   const { id } = useParams();
   const { companyName, canReview } = useApp();
   const qc = useQueryClient();
-  const doc = useQuery({ queryKey: ["document", id], queryFn: () => get<DocumentDetail>(`/api/documents/${id}`) });
+  const doc = useQuery({
+    queryKey: ["document", id],
+    queryFn: () => get<DocumentDetail>(`/api/documents/${id}`),
+    // Während der Neuerkennung regelmäßig nachladen, bis der Worker fertig ist.
+    refetchInterval: (q) => (q.state.data && IN_PROGRESS.has(q.state.data.status) ? 3000 : false),
+  });
   const transmissions = useQuery({
     queryKey: ["transmissions", "document", id],
     queryFn: () => get<Transmission[]>(`/api/datev/transmissions${query({ document_id: id, include_test: true })}`),
@@ -37,6 +45,10 @@ export function DocumentDetailPage() {
   };
   const dryRun = useMutation({
     mutationFn: () => post<{ preview: Record<string, unknown> }>(`/api/datev/documents/${id}/dry-run`),
+    onSuccess: refresh,
+  });
+  const reprocess = useMutation({
+    mutationFn: () => post<DocumentDetail>(`/api/documents/${id}/reprocess`),
     onSuccess: refresh,
   });
 
@@ -62,8 +74,17 @@ export function DocumentDetailPage() {
             <Button onClick={() => setDialog("ignore")}>Ignorieren</Button>
             <Button onClick={() => setDialog("duplicate")}>Als Dublette</Button>
           </>}
+          {canReview && REPROCESSABLE.has(d.status) &&
+            <Button disabled={reprocess.isPending} onClick={() => reprocess.mutate()}
+              title="Erkennung erneut ausführen (Regeln, OCR, KI-Fallback)">Neu erkennen</Button>}
         </>}
       />
+      {reprocess.error && <div className="mb-4"><ErrorBox error={reprocess.error} /></div>}
+      {IN_PROGRESS.has(d.status) && (
+        <div className="mb-4">
+          <Notice tone="neutral">Wird neu erkannt – die Seite aktualisiert sich automatisch.</Notice>
+        </div>
+      )}
 
       {d.review_reason && (
         <div className="mb-4">

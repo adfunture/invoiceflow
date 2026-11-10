@@ -1,4 +1,4 @@
-"""Dokumente: Übersicht mit Filtern, Detail, Original-Download, manuelle Prüfung."""
+"""Dokumente: Übersicht mit Filtern, Detail, Original-Download, manuelle Prüfung, Neuerkennung."""
 from __future__ import annotations
 
 from datetime import date
@@ -21,6 +21,7 @@ from invoiceflow.api.schemas import (
 )
 from invoiceflow.db.enums import DocumentStatus, DocumentType
 from invoiceflow.db.models import Document, EmailMessage, InvoiceDuplicate, InvoiceMetadata, Mailbox
+from invoiceflow.services import reprocess as reprocess_svc
 from invoiceflow.services import review as review_svc
 from invoiceflow.services.audit import audit
 from invoiceflow.storage import StorageError, get_store
@@ -151,6 +152,18 @@ def review(doc_id: int, body: ReviewIn, auth: AuthContext = Depends(require_revi
                                    corrections=body.corrections, duplicate_of=body.duplicate_of_document_id,
                                    allowed_company_ids=auth.company_ids)
     except review_svc.ReviewError as exc:
+        db.rollback()
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    db.commit()
+    return get_document(doc_id, auth, db)
+
+
+@router.post("/{doc_id}/reprocess", response_model=DocumentDetailOut)
+def reprocess(doc_id: int, auth: AuthContext = Depends(require_reviewer), db: Session = Depends(get_db)) -> DocumentDetailOut:
+    """Dokument in Prüfung neu erkennen lassen (Regeln, OCR und ggf. KI im Processing-Worker)."""
+    try:
+        reprocess_svc.request_reprocess(db, doc_id, auth.actor, allowed_company_ids=auth.company_ids)
+    except reprocess_svc.ReprocessError as exc:
         db.rollback()
         raise HTTPException(exc.status_code, str(exc)) from exc
     db.commit()
