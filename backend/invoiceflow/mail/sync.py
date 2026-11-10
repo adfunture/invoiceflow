@@ -449,6 +449,7 @@ class MailboxSyncer:
                     detected_invoice_links=[a for a in (_clean(u, 2000) for u in parsed.invoice_links) if a],
                     body_preview=_clean(parsed.body_preview, 2000),
                     body_mentions_invoice=parsed.body_mentions_invoice,
+                    sender_auth=parsed.sender_auth,
                 )
 
         with self.sessions() as db:

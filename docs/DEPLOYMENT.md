@@ -222,3 +222,28 @@ tägliches eigenes, verschlüsseltes Backup in einen getrennten Bucket, wöchent
 Nur über `invoiceflow migrate` (= `alembic upgrade head`) gegen die jeweilige
 Datenbank. Niemals Produktions-DB als Shadow-/Test-DB verwenden; die Tests
 leeren ihre Datenbank vollständig.
+
+
+## Alarme einrichten
+
+Alarme laufen über `ops-monitor` (alle 10 Minuten). Ohne Kanal erscheinen sie nur im Dashboard.
+Die Variablen werden als Shared Variables angelegt (alle Services nutzen sie, die IaC übernimmt sie mit `preserve()`).
+
+**Telegram (empfohlen, aufs Handy):**
+1. In Telegram `@BotFather` öffnen → `/newbot` → Name vergeben → Token kopieren.
+2. Dem neuen Bot eine Nachricht schreiben (sonst darf er dir nicht schreiben).
+3. Chat-ID ermitteln: `https://api.telegram.org/bot<TOKEN>/getUpdates` im Browser öffnen → `"chat":{"id":…}`.
+4. Railway-Variablen: `INVOICEFLOW_SECRET_TELEGRAM_BOT=<Token>`, `ALERT_TELEGRAM_TOKEN_REF=INVOICEFLOW_SECRET_TELEGRAM_BOT`,
+   `ALERT_TELEGRAM_CHAT_ID=<Chat-ID>`.
+
+**E-Mail:** `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `ALERT_SMTP_HOST`, `ALERT_SMTP_PORT` (465), `ALERT_SMTP_USERNAME`,
+`ALERT_SMTP_CREDENTIAL_REF=INVOICEFLOW_SECRET_SMTP_ALERTS` und `INVOICEFLOW_SECRET_SMTP_ALERTS=<Passwort>`.
+
+Danach im Dashboard: **Einstellungen → Alarme → Testalarm senden**. Pro Kanal wird angezeigt, ob es geklappt hat.
+
+## Belege ohne E-Mail
+
+- **Hochladen:** Rechnungen → „Belege hochladen“ (PDF, XML, Foto). Auf dem Handy öffnet das Feld Kamera und Dateien –
+  so kommen auch Belege aus WhatsApp ins System (in WhatsApp teilen/speichern, dann hochladen).
+- **Portal-Links:** Einstellung „Rechnungslinks automatisch laden“ – nur für dort eingetragene Domains, z. B.
+  `invoice.stripe.com, pay.stripe.com`.

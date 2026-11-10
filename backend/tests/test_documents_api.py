@@ -216,8 +216,61 @@ def test_approve_can_remember_sender_as_invoice_sender(admin, accounts):
     settings = {s["key"]: s["value"] for s in admin.get("/api/settings").json()}
     assert settings["recognition.invoice_senders"] == ["buchhaltung@lieferant.example"]
 
+    # Ohne bestätigten Absender (SPF/DKIM) greift die Regel nicht – das From-Feld lässt sich fälschen.
     deliver(accounts, [pdf_att([*receipt[:3], "Rechnungsnummer: R-2", *receipt[4:]], "r2.pdf")], subject="Receipt 2")
     process(accounts)
     second = [d for d, _ in documents() if d.id != doc.id][0]
-    assert second.document_type == "invoice"
-    assert second.status == "ready_for_datev", second.review_reason
+    assert second.status == "manual_review"
+    detail = admin.get(f"/api/documents/{second.id}").json()
+    assert any("nicht per SPF/DKIM" in w for w in detail["invoice"]["raw_extraction"]["warnings"])
+
+    deliver(accounts, [pdf_att([*receipt[:3], "Rechnungsnummer: R-3", *receipt[4:]], "r3.pdf")], subject="Receipt 3",
+            auth_results=["mx.kasserver.com; dkim=pass header.d=lieferant.example; spf=pass smtp.mailfrom=lieferant.example"])
+    process(accounts)
+    third = [d for d, _ in documents() if d.id not in (doc.id, second.id)][0]
+    assert third.document_type == "invoice"
+    assert third.status == "ready_for_datev", third.review_reason
+
+
+def _upload(client, data: bytes, filename: str, company: str = "adfunture"):
+    return client.http.post("/api/documents/upload",
+                            params={"company_id": company_id(company), "filename": filename}, content=data,
+                            headers={**client._headers(), "Content-Type": "application/octet-stream"})
+
+
+def test_manual_upload_runs_through_recognition(admin):
+    from invoiceflow.db.session import get_sessionmaker
+    from invoiceflow.workers.processing_worker import run_once
+
+    from .test_pipeline import processor
+
+    pdf = make_pdf(invoice_lines("UP-1"))
+    response = _upload(admin, pdf, "Tankbeleg.pdf")
+    assert response.status_code == 200, response.text
+    run_once(processor(), get_sessionmaker(), "test-processing")
+    (doc, meta), = documents()
+    assert doc.status == "ready_for_datev" and meta.invoice_number == "UP-1"
+    assert doc.original_filename == "Tankbeleg.pdf"
+    detail = admin.get(f"/api/documents/{doc.id}").json()
+    assert detail["mailbox_email"].endswith("@upload.invoiceflow.invalid")
+    # Gleiche Datei nochmal → Dublette, nicht zweimal an DATEV
+    assert _upload(admin, pdf, "nochmal.pdf").status_code == 200
+    run_once(processor(), get_sessionmaker(), "test-processing")
+    assert [d.status for d, _ in documents()] == ["ready_for_datev", "duplicate"]
+    # Upload-Postfach erscheint nicht in der Postfachliste
+    assert not any("upload.invoiceflow.invalid" in m["email_address"] for m in admin.get("/api/mailboxes").json())
+    log = admin.get("/api/audit-logs", params={"entity_type": "email_message"}).json()[0]
+    assert log["action"] == "document.uploaded"
+
+
+def test_manual_upload_rejects_bad_files_and_foreign_company():
+    make_user("pruefer4@adfunture.de", UserRole.reviewer, ("adfunture",))
+    reviewer = ApiClient()
+    reviewer.login("pruefer4@adfunture.de")
+    bad = _upload(reviewer, b"MZ\x90\x00 kein pdf", "rechnung.exe")
+    assert bad.status_code == 422 and "nicht verwendbar" in bad.json()["detail"]
+    assert _upload(reviewer, make_pdf(invoice_lines()), "r.pdf", company="sbc").status_code == 404
+    make_user("leser@adfunture.de", UserRole.viewer, ("adfunture",))
+    viewer = ApiClient()
+    viewer.login("leser@adfunture.de")
+    assert _upload(viewer, make_pdf(invoice_lines()), "r.pdf").status_code == 403

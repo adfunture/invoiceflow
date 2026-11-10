@@ -268,6 +268,8 @@ class EmailMessage(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     body_preview: Mapped[str | None] = mapped_column(Text)
     body_mentions_invoice: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # SPF/DKIM/DMARC laut oberstem Authentication-Results-Header: pass | fail | none (NULL = vor Einführung)
+    sender_auth: Mapped[str | None] = mapped_column(String(10))
     # Rohnachricht nach Ablauf der Aufbewahrungsfrist entfernt (nur E-Mails ohne Rechnungsbezug).
     raw_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attachment_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

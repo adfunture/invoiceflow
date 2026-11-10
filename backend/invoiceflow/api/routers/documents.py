@@ -4,7 +4,8 @@ from __future__ import annotations
 from datetime import date
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -106,6 +107,44 @@ def bulk_ignore(body: BulkIgnoreIn, auth: AuthContext = Depends(require_reviewer
             failed.append(BulkFailureOut(document_id=doc_id, error=str(exc)))
     db.commit()
     return BulkIgnoreOut(ignored=ignored, failed=failed)
+
+
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # Obergrenze vor dem Lesen; die eigentliche Grenze ist attachments.max_size_mb
+
+
+class UploadOut(BaseModel):
+    email_message_id: int
+
+
+@router.post("/upload", response_model=UploadOut)
+async def upload_document(
+    request: Request,
+    company_id: int = Query(...),
+    filename: str = Query(..., min_length=1, max_length=500),
+    note: str | None = Query(default=None, max_length=500),
+    auth: AuthContext = Depends(require_reviewer),
+    db: Session = Depends(get_db),
+) -> UploadOut:
+    """Beleg hochladen (Datei als Request-Body). Läuft durch dieselbe Erkennung wie E-Mail-Anhänge."""
+    from invoiceflow.services import upload as upload_svc
+
+    ensure_company(auth, company_id)
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Datei zu groß")
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "Datei zu groß")
+    try:
+        message_id = upload_svc.create_upload(db, get_store(), company_id=company_id, actor=auth.actor,
+                                              filename=filename, data=bytes(data), note=note)
+    except upload_svc.UploadError as exc:
+        db.rollback()
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    db.commit()
+    return UploadOut(email_message_id=message_id)
 
 
 @router.post("/bulk-reprocess", response_model=BulkReprocessOut)

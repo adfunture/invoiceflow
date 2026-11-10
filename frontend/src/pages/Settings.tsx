@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { type Company, get, patch, put, type Setting } from "../api";
+import { type Company, get, patch, post, put, type Setting } from "../api";
 import { useApp } from "../app-context";
-import { Button, Card, ErrorBox, Field, Input, PageHeader, Select, Spinner } from "../components/ui";
+import { Button, Card, ErrorBox, Field, Input, Notice, PageHeader, Select, Spinner } from "../components/ui";
 
 const LABELS: Record<string, string> = {
   "datev.test_mode": "DATEV-Testmodus",
   "mail.blocked_senders": "Blockierte Absender",
   "mail.attachment_only_senders": "Absender nur mit Anhang",
   "recognition.invoice_senders": "Rechnungsabsender",
+  "links.auto_fetch_domains": "Rechnungslinks automatisch laden",
   "datev.upload_mail_zugferd_enabled": "ZUGFeRD per Upload Mail senden",
   "datev.max_mail_size_mb": "Max. Mailgröße an DATEV (MB)",
   "datev.max_attempts": "Versuche bei vorübergehenden SMTP-Fehlern",
@@ -42,6 +43,7 @@ export function SettingsPage() {
             </div>
           )}
         </Card>
+        {isAdmin && <AlertsCard />}
         <CompaniesCard />
       </div>
     </>
@@ -83,13 +85,46 @@ function SettingRow({ s, editable }: { s: Setting; editable: boolean }) {
         ) : (
           <>
             <Input disabled={!editable} inputMode={isInt ? "numeric" : "text"} value={value}
-              placeholder={isList ? "z. B. service@paypal.de, newsletter.example" : undefined}
+              placeholder={isList ? "z. B. service@paypal.de, invoice.stripe.com" : undefined}
               onChange={(e) => setValue(e.target.value)} />
             {editable && <Button onClick={save} disabled={mut.isPending || value === shown(s.value)}>Speichern</Button>}
           </>
         )}
       </div>
     </div>
+  );
+}
+
+/** Testalarm: zeigt sofort, ob E-Mail/Telegram-Alarme ankommen (Konfiguration über ALERT_*-Variablen). */
+function AlertsCard() {
+  const test = useMutation({
+    mutationFn: () => post<{ channels: { name: string; ok: boolean; error: string | null }[] }>("/api/alerts/test"),
+  });
+  return (
+    <Card title="Alarme">
+      <p className="mb-3 text-sm text-slate-600">
+        Fehler (Backup, Postfächer, Worker, DATEV) werden per E-Mail und/oder Telegram gemeldet. Eingerichtet wird das
+        über die ALERT_*-Variablen in Railway (siehe docs/DEPLOYMENT.md).
+      </p>
+      <Button disabled={test.isPending} onClick={() => test.mutate()}>Testalarm senden</Button>
+      <ErrorBox error={test.error} />
+      {test.data && (
+        <div className="mt-3">
+          {test.data.channels.length === 0 ? (
+            <Notice tone="warning">Kein Alarmkanal eingerichtet – Alarme erscheinen nur hier im Dashboard.</Notice>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {test.data.channels.map((c) => (
+                <li key={c.name} className={c.ok ? "text-emerald-700" : "text-rose-700"}>
+                  {c.ok ? "✓" : "✗"} {c.name === "email" ? "E-Mail" : c.name === "telegram" ? "Telegram" : c.name}
+                  {c.ok ? " gesendet" : `: ${c.error}`}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 

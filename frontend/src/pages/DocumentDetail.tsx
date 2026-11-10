@@ -7,7 +7,7 @@ import { DocumentPreview } from "../components/DocumentPreview";
 import { TransmissionActions } from "../components/TransmissionActions";
 import { Badge, Button, Card, DescList, ErrorBox, Field, Input, Modal, Notice, PageHeader, Select, Spinner, StatusBadge, Textarea } from "../components/ui";
 import {
-  DOCUMENT_STATUS, DOCUMENT_TYPE, FIELD_SOURCE, fmtBytes, fmtDate, fmtDateTime, fmtMoney, SEND_MODE, SOURCE_KIND,
+  DOCUMENT_STATUS, DOCUMENT_TYPE, FIELD_SOURCE, fmtBytes, fmtDate, fmtDateTime, fmtMoney, mailboxLabel, SEND_MODE, SOURCE_KIND,
   TRANSMISSION_STATUS,
 } from "../format";
 
@@ -65,7 +65,7 @@ export function DocumentDetailPage() {
         subtitle={<span className="flex flex-wrap items-center gap-2">
           <StatusBadge map={DOCUMENT_STATUS} value={d.status} />
           <Badge>{DOCUMENT_TYPE[d.document_type] ?? d.document_type}</Badge>
-          <span>{companyName(d.company_id)} · {d.mailbox_email}</span>
+          <span>{companyName(d.company_id)} · {mailboxLabel(d.mailbox_email)}</span>
         </span>}
         actions={<>
           <Link to="/documents"><Button variant="ghost">Zur Liste</Button></Link>
@@ -126,7 +126,7 @@ export function DocumentDetailPage() {
 
           <Card title="Herkunft">
             <DescList items={[
-              ["Postfach", d.mailbox_email],
+              ["Postfach", mailboxLabel(d.mailbox_email)],
               ["Empfangen", fmtDateTime(d.received_at)],
               ["Absender", d.message_from],
               ["Betreff", d.message_subject],

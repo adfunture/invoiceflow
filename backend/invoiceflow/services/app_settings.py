@@ -117,6 +117,11 @@ SETTINGS: dict[str, SettingSpec] = {
         "Absender, deren unklare Belege als Rechnung gelten (z. B. englische Receipts von SaaS-Anbietern). "
         "Alle übrigen Prüfungen (Pflichtangaben, Dubletten, Empfänger) gelten weiter. Einträge entstehen beim Freigeben.",
     ),
+    "links.auto_fetch_domains": SettingSpec(
+        [], _sender_list,
+        "Domains, deren Rechnungslinks automatisch geladen werden (z. B. invoice.stripe.com, pay.stripe.com). "
+        "Nur HTTPS und öffentliche Server; übernommen wird nur ein echtes PDF bzw. eine XML-Rechnung.",
+    ),
     "attachments.max_size_mb": SettingSpec(25, _int_range(1, 100), "Maximale Größe je Anhang."),
     "imap.max_message_size_mb": SettingSpec(
         50, _int_range(1, 200), "Größere Nachrichten werden nicht heruntergeladen, sondern zur Prüfung markiert."

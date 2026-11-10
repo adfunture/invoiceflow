@@ -71,9 +71,9 @@ _uid_counter = iter(range(1, 10_000))
 
 
 def deliver(accounts, attachments, mailbox=INFO, subject="Rechnung", body="Anbei die Rechnung.", hours=None,
-            sender="buchhaltung@lieferant.example"):
+            sender="buchhaltung@lieferant.example", auth_results=None):
     raw = build_email(subject, sender=sender, body=body, attachments=attachments,
-                      message_id=f"<m{next(_uid_counter)}@test>")
+                      message_id=f"<m{next(_uid_counter)}@test>", auth_results=auth_results)
     accounts[mailbox].deliver(raw, ON_START + timedelta(hours=hours or next(_uid_counter)))
     return raw
 
@@ -464,3 +464,48 @@ def test_attachment_only_sender_skips_notifications_but_keeps_invoices(accounts)
     msgs = messages()
     assert [m.subject for m in msgs] == ["Gebührenrechnung"]
     assert documents()[0][0].status == DocumentStatus.ready_for_datev
+
+
+def test_invoice_link_on_allowed_domain_is_fetched(accounts):
+    from invoiceflow.mail import link_fetch
+
+    with get_sessionmaker()() as s:
+        app_settings.set_setting(s, "links.auto_fetch_domains", ["pay.stripe.com", "invoice.stripe.com"])
+        s.commit()
+    pdf = make_pdf(invoice_lines("ST-1"))
+    calls: list[str] = []
+
+    def fetcher(url, domains, max_bytes):
+        calls.append(url)
+        if "fail" in url:
+            raise link_fetch.LinkFetchError("HTTP 404")
+        return link_fetch.FetchedFile(url, pdf, "application/pdf", "Invoice-ST-1.pdf")
+
+    deliver(accounts, [], body="Ihre Rechnung: https://invoice.stripe.com/i/acct_1/live_abc\n"
+                               "Hilfe: https://support.stripe.com/questions")
+    deliver(accounts, [], body="Ihre Rechnung: https://pay.stripe.com/invoice/fail/pdf")
+    deliver(accounts, [], body="Ihre Rechnung: https://portal.example.com/invoice/9")
+    proc = DocumentProcessor(get_sessionmaker(), get_store(), ai_factory=ai_mod.get_provider, ocr_factory=no_ocr,
+                             link_fetcher=fetcher)
+    process(accounts, proc=proc)
+    ok, failed, other = messages()
+    assert calls == ["https://invoice.stripe.com/i/acct_1/live_abc", "https://pay.stripe.com/invoice/fail/pdf"]
+    assert ok.status == EmailMessageStatus.processed
+    (doc, meta), = documents()
+    assert doc.status == DocumentStatus.ready_for_datev and meta.invoice_number == "ST-1"
+    assert failed.status == EmailMessageStatus.manual_review and "Link-Abruf fehlgeschlagen: HTTP 404" in failed.review_reason
+    assert other.status == EmailMessageStatus.manual_review  # Domain nicht freigegeben
+    # Erneute Verarbeitung lädt nicht nochmal
+    proc.process_message(ok.id)
+    assert len(calls) == 2
+
+
+def test_link_fetch_rules():
+    from invoiceflow.mail import link_fetch
+
+    assert link_fetch._rewrite("https://invoice.stripe.com/i/acct_1/live_abc?s=em") == \
+        "https://pay.stripe.com/invoice/acct_1/live_abc/pdf"
+    assert link_fetch.allowed("https://pay.stripe.com/x", ["stripe.com"])
+    assert not link_fetch.allowed("https://pay.stripe.com.evil.example/x", ["stripe.com"])
+    with pytest.raises(link_fetch.LinkFetchError):
+        link_fetch.fetch_invoice("https://evil.example/x.pdf", ["stripe.com"], 1000)

@@ -1,15 +1,18 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { type DocumentItem, get, query } from "../api";
 import { useApp } from "../app-context";
 import { DocumentTable } from "../components/DocumentTable";
+import { UploadDialog } from "../components/UploadDialog";
 import { Button, Card, ErrorBox, Field, Input, PageHeader, Select, Spinner } from "../components/ui";
 import { DOCUMENT_STATUS, DOCUMENT_TYPE } from "../format";
 
 const PAGE = 50;
 
 export function DocumentsPage() {
-  const { companyId } = useApp();
+  const { companyId, canReview } = useApp();
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const filters = {
     status: params.get("status") ?? "",
@@ -40,7 +43,9 @@ export function DocumentsPage() {
 
   return (
     <>
-      <PageHeader title="Rechnungen" subtitle="Alle erkannten Dokumente aus den Postfächern" />
+      <PageHeader title="Rechnungen" subtitle="Alle erkannten Dokumente aus Postfächern und Uploads"
+        actions={canReview ? <Button variant="primary" onClick={() => setUploadOpen(true)}>Belege hochladen</Button> : undefined} />
+      <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       <Card>
         <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label="Status">

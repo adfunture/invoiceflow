@@ -58,7 +58,9 @@ def list_mailboxes(
     auth: AuthContext = Depends(require_viewer),
     db: Session = Depends(get_db),
 ) -> list[MailboxOut]:
-    stmt = select(Mailbox).order_by(Mailbox.company_id, Mailbox.email_address)
+    # Interne Upload-Postfächer (manueller Beleg-Upload) sind keine echten Postfächer.
+    stmt = (select(Mailbox).where(~Mailbox.email_address.like("%@upload.invoiceflow.invalid"))
+            .order_by(Mailbox.company_id, Mailbox.email_address))
     if company_id is not None:
         ensure_company(auth, company_id)
         stmt = stmt.where(Mailbox.company_id == company_id)

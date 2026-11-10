@@ -5,6 +5,12 @@ const dateTimeFmt = new Intl.DateTimeFormat("de-DE", {
   day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
 });
 
+/** Interne Upload-Postfächer lesbar anzeigen. */
+export function mailboxLabel(email: string | null | undefined): string {
+  if (!email) return "–";
+  return email.endsWith("@upload.invoiceflow.invalid") ? "Manueller Upload" : email;
+}
+
 export function fmtDate(value: string | null | undefined): string {
   if (!value) return "–";
   const d = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);

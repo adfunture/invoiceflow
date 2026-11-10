@@ -23,6 +23,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 
 from invoiceflow.db.enums import AttachmentSafety
+from invoiceflow.mail.auth_results import sender_auth
 
 MAX_PREVIEW_CHARS = 2000
 MAX_NESTING = 10  # verschachtelte Weiterleitungen; schützt vor Rekursionsbomben
@@ -131,6 +132,7 @@ class ParsedMessage:
     body_mentions_invoice: bool = False
     parse_warnings: list[str] = field(default_factory=list)
     reply_references: list[str] = field(default_factory=list)  # In-Reply-To und References
+    sender_auth: str = "none"  # pass | fail | none (siehe auth_results)
 
     @property
     def needs_processing(self) -> bool:
@@ -378,6 +380,7 @@ def parse_message(raw: bytes, *, max_attachment_bytes: int) -> ParsedMessage:
         invoice_links=_invoice_links(urls, full_text + " " + (subject or "")),
         body_mentions_invoice=bool(_INVOICE_WORDS.search(full_text + " " + (subject or ""))),
         parse_warnings=warnings,
+        sender_auth=sender_auth(msg, (_addresses(msg, "From") or [None])[0]),
         reply_references=re.findall(r"<[^<>\s]+>", " ".join(
             v for v in (_decode_header(msg, "In-Reply-To"), _decode_header(msg, "References")) if v))[:50],
     )

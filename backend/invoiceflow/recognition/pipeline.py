@@ -17,11 +17,13 @@ oder Rechnungshinweise im Text führen zur manuellen Prüfung.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -45,7 +47,8 @@ from invoiceflow.db.models import (
     InvoiceDuplicate,
     InvoiceMetadata,
 )
-from invoiceflow.mail.mime import is_dangerous
+from invoiceflow.mail import link_fetch
+from invoiceflow.mail.mime import classify_attachment, is_dangerous
 from invoiceflow.recognition import ai as ai_mod
 from invoiceflow.recognition.einvoice import EInvoiceError, parse_einvoice
 from invoiceflow.recognition.model import (
@@ -118,15 +121,18 @@ class DocumentProcessor:
         *,
         ai_factory: Callable[[str | None], ai_mod.AiProvider] = ai_mod.get_provider,
         ocr_factory: Callable[[str | None], OcrProvider] = get_ocr,
+        link_fetcher: link_fetch.Fetcher = link_fetch.fetch_invoice,
     ) -> None:
         self.sessions = sessions
         self.store = store
         self.ai_factory = ai_factory
         self.ocr_factory = ocr_factory
+        self.link_fetcher = link_fetcher
 
     # --- Nachricht ----------------------------------------------------------
 
     def process_message(self, message_id: int) -> EmailMessageStatus:
+        self._fetch_links(message_id)
         with self.sessions() as db:
             msg = db.get(EmailMessage, message_id)
             if msg is None:
@@ -148,6 +154,55 @@ class DocumentProcessor:
         for doc_id in doc_ids:
             self.process_document(doc_id)
         return self._finalize_message(message_id)
+
+    def _fetch_links(self, message_id: int) -> None:
+        """Rechnungslinks auf freigegebenen Domains laden und wie Anhänge ablegen (einmal je Link)."""
+        with self.sessions() as db:
+            msg = db.get(EmailMessage, message_id)
+            if msg is None or not msg.detected_invoice_links:
+                return
+            domains = list(app_settings.get_setting(db, "links.auto_fetch_domains", msg.company_id) or [])
+            if not domains:
+                return
+            existing = list(db.scalars(select(EmailAttachment).where(EmailAttachment.email_message_id == msg.id)))
+            if any(a.safety_status == AttachmentSafety.ok and a.storage_key and not (a.content_id or "").startswith("link:")
+                   for a in existing):
+                return  # echter Anhang vorhanden – Link ist nur ein Zusatz
+            tried = {a.content_id for a in existing if (a.content_id or "").startswith("link:")}
+            max_bytes = int(app_settings.get_setting(db, "attachments.max_size_mb", msg.company_id)) * 1024 * 1024
+            slug = db.scalar(select(Company.slug).where(Company.id == msg.company_id))
+            company_id, links = msg.company_id, list(msg.detected_invoice_links)
+            next_part = 1000 + len(tried)
+
+        rows: list[dict] = []
+        for url in links:
+            key = "link:" + hashlib.sha256(url.encode()).hexdigest()[:32]
+            if key in tried or not link_fetch.allowed(url, domains):
+                continue
+            tried.add(key)
+            row = dict(company_id=company_id, email_message_id=message_id, part_index=next_part, content_id=key)
+            next_part += 1
+            try:
+                fetched = self.link_fetcher(url, domains, max_bytes)
+            except Exception as exc:  # noqa: BLE001 – Abruf scheitert: Mail bleibt mit Grund in der Prüfung
+                reason = str(exc) if isinstance(exc, link_fetch.LinkFetchError) else type(exc).__name__
+                rows.append(row | dict(filename=urlsplit(url).hostname, size_bytes=0, safety_status=AttachmentSafety.corrupt,
+                                       rejection_reason=f"Link-Abruf fehlgeschlagen: {reason}"[:1000]))
+                continue
+            safety, detected, reason = classify_attachment(fetched.filename, fetched.data, max_bytes)
+            row |= dict(filename=fetched.filename, declared_content_type=fetched.content_type,
+                        detected_content_type=detected, size_bytes=len(fetched.data), safety_status=safety,
+                        rejection_reason=reason)
+            if safety == AttachmentSafety.ok:
+                obj = self.store.put(slug, "attachment", fetched.data, fetched.filename.rsplit(".", 1)[-1])
+                row |= dict(sha256=obj.sha256, storage_key=obj.key)
+            rows.append(row)
+            log.info("invoice_link_fetched", extra={"email_message_id": message_id, "ok": safety == AttachmentSafety.ok})
+        if rows:
+            with self.sessions() as db:
+                for row in rows:
+                    db.execute(insert(EmailAttachment).values(**row).on_conflict_do_nothing())
+                db.commit()
 
     def _finalize_message(self, message_id: int) -> EmailMessageStatus:
         with self.sessions() as db:
@@ -192,9 +247,12 @@ class DocumentProcessor:
             ai_provider = app_settings.get_setting(db, "ai.provider", doc.company_id)
             ai_min = int(app_settings.get_setting(db, "ai.min_confidence_percent", doc.company_id)) / 100
             ocr_provider = app_settings.get_setting(db, "ocr.provider", doc.company_id)
-            sender = db.scalar(select(EmailMessage.from_address).where(EmailMessage.id == doc.email_message_id))
+            sender, auth = db.execute(select(EmailMessage.from_address, EmailMessage.sender_auth)
+                                      .where(EmailMessage.id == doc.email_message_id)).one()
             invoice_sender = app_settings.sender_matches(
                 sender, app_settings.get_setting(db, "recognition.invoice_senders", doc.company_id) or [])
+            # Positive Regel nur für echte Absender – das From-Feld allein lässt sich fälschen.
+            sender_verified = auth == "pass"
             storage_key, sha, mime, filename = doc.storage_key, doc.sha256, doc.mime_type, doc.original_filename
             db.commit()
 
@@ -206,9 +264,12 @@ class DocumentProcessor:
         analysis = self._analyze(data, mime, ctx, ocr_provider)
         inv = analysis.invoice
         if inv is not None and invoice_sender and inv.document_type == DocumentType.unclear:
-            # Absenderregel (beim Freigeben gelernt): unklare Belege dieses Absenders sind Rechnungen.
-            inv.document_type = DocumentType.invoice
-            inv.warnings.append("Dokumentart über Absenderregel als Rechnung erkannt")
+            if sender_verified:
+                # Absenderregel (beim Freigeben gelernt): unklare Belege dieses Absenders sind Rechnungen.
+                inv.document_type = DocumentType.invoice
+                inv.warnings.append("Dokumentart über Absenderregel als Rechnung erkannt")
+            else:
+                inv.warnings.append("Absenderregel nicht angewendet: Absender nicht per SPF/DKIM/DMARC bestätigt")
         if inv is not None and ai_enabled and _needs_ai(inv):
             self._ask_ai(analysis, ai_provider, ai_min)
         decision = decide(analysis, ctx, ai_min)

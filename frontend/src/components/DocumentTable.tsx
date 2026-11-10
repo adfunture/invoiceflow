@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { DocumentItem } from "../api";
 import { useApp } from "../app-context";
-import { DOCUMENT_STATUS, DOCUMENT_TYPE, fmtDate, fmtMoney } from "../format";
+import { DOCUMENT_STATUS, DOCUMENT_TYPE, fmtDate, fmtMoney, mailboxLabel } from "../format";
 import { Empty, StatusBadge, Table, td } from "./ui";
 
 export interface DocumentSelection {
@@ -43,7 +43,7 @@ export function DocumentTable({ docs, compact = false, selection }: {
           <td className={`${td} num`}>{d.invoice?.invoice_number ?? "–"}</td>
           <td className={`${td} num whitespace-nowrap`}>{fmtDate(d.invoice?.invoice_date)}</td>
           <td className={`${td} num whitespace-nowrap text-right`}>{fmtMoney(d.invoice?.gross_amount, d.invoice?.currency)}</td>
-          {!compact && <td className={`${td} text-slate-600`}>{d.mailbox_email}</td>}
+          {!compact && <td className={`${td} text-slate-600`}>{mailboxLabel(d.mailbox_email)}</td>}
           {!compact && <td className={td}>{DOCUMENT_TYPE[d.document_type] ?? d.document_type}</td>}
           <td className={td}>
             <StatusBadge map={DOCUMENT_STATUS} value={d.status} />

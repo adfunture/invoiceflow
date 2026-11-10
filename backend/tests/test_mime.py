@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from email.message import EmailMessage
 
+import pytest
+
 from invoiceflow.db.enums import AttachmentSafety
 from invoiceflow.mail.mime import parse_message, sanitize_filename
 
@@ -210,3 +212,19 @@ def test_noise_links_are_not_invoice_links():
     ]
     msg = parse(build_email(subject="Zahlungsbeleg", body="Ihr Zahlungsbeleg:\n" + "\n".join(links), attachments=[]))
     assert msg.invoice_links == [links[0], links[-1]]
+
+
+@pytest.mark.parametrize(("headers", "sender", "expected"), [
+    (["mx.kasserver.com; dkim=pass header.d=lieferant.example; spf=fail"], "a@lieferant.example", "pass"),
+    (["mx.kasserver.com; dmarc=pass header.from=paypal.de"], "service@paypal.de", "pass"),
+    (["mx.kasserver.com; spf=pass smtp.mailfrom=bounce.mail.lieferant.example"], "a@lieferant.example", "pass"),
+    # DKIM einer fremden Domain (z. B. Versanddienst) beweist nichts über den Absender
+    (["mx.kasserver.com; dkim=pass header.d=sendgrid.net; spf=pass smtp.mailfrom=sendgrid.net"], "a@lieferant.example", "fail"),
+    (["mx.kasserver.com; dkim=fail header.d=lieferant.example; dmarc=fail"], "a@lieferant.example", "fail"),
+    # Nur der oberste Header zählt – ein vom Absender mitgeschickter "pass" darunter wird ignoriert
+    (["mx.kasserver.com; dkim=none; spf=softfail", "evil; dkim=pass header.d=lieferant.example"], "a@lieferant.example", "fail"),
+    ([], "a@lieferant.example", "none"),
+])
+def test_sender_auth_from_authentication_results(headers, sender, expected):
+    msg = parse(build_email(sender=sender, auth_results=headers))
+    assert msg.sender_auth == expected

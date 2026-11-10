@@ -29,8 +29,11 @@ def build_email(
     body: str = "Anbei die Rechnung.",
     attachments: list[tuple[str, bytes, str]] | None = None,
     message_id: str | None = None,
+    auth_results: list[str] | None = None,
 ) -> bytes:
     msg = EmailMessage()
+    for value in auth_results or []:  # oberster Header zuerst (wie vom empfangenden Server gesetzt)
+        msg["Authentication-Results"] = value
     msg["From"] = sender
     msg["To"] = to
     msg["Subject"] = subject

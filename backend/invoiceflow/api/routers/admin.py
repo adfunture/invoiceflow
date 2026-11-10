@@ -4,16 +4,47 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from invoiceflow.api.deps import AuthContext, ensure_company, get_db, require_admin, require_viewer
 from invoiceflow.api.schemas import AuditOut, SettingIn, SettingOut
+from invoiceflow.config import Settings, get_settings
 from invoiceflow.db.models import AuditLog, Company
 from invoiceflow.services import app_settings
 from invoiceflow.services.audit import audit
 
 router = APIRouter(prefix="/api", tags=["admin"])
+
+
+class AlertChannelOut(BaseModel):
+    name: str
+    ok: bool
+    error: str | None = None
+
+
+class TestAlertOut(BaseModel):
+    channels: list[AlertChannelOut]
+
+
+@router.post("/alerts/test", response_model=TestAlertOut)
+def send_test_alert(auth: AuthContext = Depends(require_admin), db: Session = Depends(get_db),
+                    settings: Settings = Depends(get_settings)) -> TestAlertOut:
+    """Testalarm über alle eingerichteten Kanäle (E-Mail/Telegram) senden – prüft die ALERT_*-Konfiguration."""
+    from invoiceflow.logging_setup import redact_text
+    from invoiceflow.ops.monitor import configured_notifiers
+
+    channels: list[AlertChannelOut] = []
+    for notifier in configured_notifiers(settings):
+        try:
+            notifier.send("[InvoiceFlow] Testalarm", "Testalarm aus dem Dashboard – die Alarmierung funktioniert.")
+            channels.append(AlertChannelOut(name=notifier.name, ok=True))
+        except Exception as exc:  # noqa: BLE001 – Fehler gehen an die Oberfläche
+            channels.append(AlertChannelOut(name=notifier.name, ok=False, error=redact_text(f"{type(exc).__name__}: {exc}")[:300]))
+    audit(db, auth.actor, "alerts.test_sent", details={"channels": [c.model_dump() for c in channels]})
+    db.commit()
+    return TestAlertOut(channels=channels)
 
 
 @router.get("/settings", response_model=list[SettingOut])

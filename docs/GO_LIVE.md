@@ -10,7 +10,7 @@ zeigt **0 blockierend**. Die fachliche Freigabe des DATEV-Versands erfolgt danac
 - [ ] Shared Variables: `DOCUMENT_ENCRYPTION_KEY` (offline gesichert!), `S3_*`, `BACKUP_S3_*`, `INVOICEFLOW_SECRET_*`
 - [ ] `web`: `APP_ENV=production`, `COOKIE_SECURE=true`, `ALLOWED_HOSTS`, `PUBLIC_BASE_URL`, eigene Domain mit TLS
 - [ ] Services `worker-imap`, `worker-processing`, `worker-datev` (je 1 Replika), Cron `ops-monitor`, `ops-backup`, `ops-restore-check`
-- [ ] Alarmkanal: `ALERT_EMAIL_*` und/oder `ALERT_TELEGRAM_*`; Testalarm erhalten (z. B. Worker kurz stoppen)
+- [ ] Alarmkanal: `ALERT_EMAIL_*` und/oder `ALERT_TELEGRAM_*`; Testalarm erhalten (Einstellungen → Alarme → „Testalarm senden“)
 - [ ] Erstes Backup erfolgreich, `invoiceflow ops restore-check` erfolgreich
 - [ ] Railway-Zugang nur für berechtigte Personen, 2FA aktiv
 
