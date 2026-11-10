@@ -1,4 +1,4 @@
-"""Importierte E-Mails (lesend) und Worker-Status."""
+"""Importierte E-Mails (lesend), Prüfvermerke, Absender-Blockliste und Worker-Status."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -6,13 +6,14 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from invoiceflow.api.deps import AuthContext, ensure_company, get_db, require_reviewer, require_viewer
+from invoiceflow.api.deps import AuthContext, ensure_company, get_db, require_admin, require_reviewer, require_viewer
 from invoiceflow.api.schemas import AttachmentOut, EmailMessageDetailOut, EmailMessageOut, StrictInput, WorkerOut
 from invoiceflow.db.enums import EmailMessageStatus
 from invoiceflow.db.models import EmailAttachment, EmailMessage, WorkerHeartbeat
+from invoiceflow.services import app_settings
 from invoiceflow.services.audit import audit
 
 router = APIRouter(prefix="/api", tags=["messages"])
@@ -121,3 +122,54 @@ def resolve_message(message_id: int, body: MessageResolveIn, auth: AuthContext =
     _resolve(db, auth, message_id, body.outcome, body.reason)
     db.commit()
     return get_message(message_id, auth, db)
+
+
+class BlockSendersIn(StrictInput):
+    message_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BlockSendersOut(BaseModel):
+    blocked: list[str]
+    resolved: list[int]
+    failed: list[int]
+
+
+@router.post("/email-messages/block-senders", response_model=BlockSendersOut)
+def block_senders(body: BlockSendersIn, auth: AuthContext = Depends(require_admin),
+                  db: Session = Depends(get_db)) -> BlockSendersOut:
+    """Absender der gewählten E-Mails blockieren (gilt für alle Postfächer, nur Admins).
+
+    Künftige Mails dieser Adressen werden beim Abruf übersprungen. Offene E-Mails dieser
+    Absender in der Prüfung werden abgeschlossen. Aufheben: Einstellung „Blockierte Absender“.
+    """
+    failed: list[int] = []
+    addresses: list[str] = []
+    for message_id in dict.fromkeys(body.message_ids):
+        msg = db.get(EmailMessage, message_id)
+        address = (msg.from_address or "").strip().lower() if msg else ""
+        if msg is None or not auth.can_access(msg.company_id) or "@" not in address:
+            failed.append(message_id)
+        elif address not in addresses:
+            addresses.append(address)
+    if not addresses:
+        return BlockSendersOut(blocked=[], resolved=[], failed=failed)
+
+    current = list(app_settings.get_setting(db, "mail.blocked_senders") or [])
+    new = [a for a in addresses if a not in current]
+    app_settings.set_setting(db, "mail.blocked_senders", current + new, user_id=auth.user.id)
+    audit(db, auth.actor, "mail.senders_blocked", entity_type="setting", entity_id="mail.blocked_senders",
+          details={"added": new, "already_blocked": [a for a in addresses if a in current]})
+
+    resolved: list[int] = []
+    open_ids = db.scalars(select(EmailMessage.id).where(
+        EmailMessage.status == EmailMessageStatus.manual_review,
+        func.lower(EmailMessage.from_address).in_(addresses)).order_by(EmailMessage.id))
+    for message_id in list(open_ids):
+        try:
+            with db.begin_nested():
+                _resolve(db, auth, message_id, "no_invoice", "Absender blockiert")
+            resolved.append(message_id)
+        except HTTPException:
+            failed.append(message_id)
+    db.commit()
+    return BlockSendersOut(blocked=addresses, resolved=resolved, failed=failed)

@@ -98,10 +98,31 @@ function ReviewDocuments({ docs }: { docs: DocumentItem[] }) {
 }
 
 function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
-  const { companyName, canReview } = useApp();
+  const { companyName, canReview, isAdmin } = useApp();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const ids = messages.map((m) => m.id).filter((id) => selected.has(id));
+  // Absender blockieren: künftige Mails werden nicht mehr importiert, offene dieser Absender werden erledigt.
+  const block = useMutation({
+    mutationFn: (messageIds: number[]) =>
+      post<{ blocked: string[]; resolved: number[] }>("/api/email-messages/block-senders", { message_ids: messageIds }),
+    onSuccess: () => {
+      setSelected(new Set());
+      void qc.invalidateQueries({ queryKey: ["messages"] });
+      void qc.invalidateQueries({ queryKey: ["summary"] });
+      void qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+  const confirmBlock = (messageIds: number[]) => {
+    const senders = [...new Set(messages.filter((m) => messageIds.includes(m.id) && m.from_address)
+      .map((m) => m.from_address!.toLowerCase()))];
+    if (senders.length === 0) return;
+    const text = "Diese Absender blockieren? Ihre Mails werden künftig nicht mehr importiert (alle Postfächer):\n\n"
+      + senders.join("\n") + "\n\nAufheben unter Einstellungen → Blockierte Absender.";
+    if (!window.confirm(text)) return;
+    block.mutate(messageIds);
+  };
+
   // Ein Klick genügt: "Erledigt" schließt die E-Mail ab, der Vermerk wird automatisch protokolliert.
   const mutation = useMutation({
     mutationFn: (messageIds: number[]) =>
@@ -132,9 +153,15 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
           <Button disabled={ids.length === 0 || mutation.isPending} onClick={() => mutation.mutate(ids)}>
             {ids.length > 0 ? `${ids.length} erledigt` : "Erledigt"}
           </Button>
+          {isAdmin && (
+            <Button disabled={ids.length === 0 || block.isPending} onClick={() => confirmBlock(ids)}>
+              Absender blockieren
+            </Button>
+          )}
         </div>
       )}
       <ErrorBox error={mutation.error} />
+      <ErrorBox error={block.error} />
       <ul className="divide-y divide-slate-100">
         {messages.map((m) => (
           <li key={m.id} className="flex gap-3 py-3 text-sm">
@@ -146,7 +173,12 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
                   <div className="font-medium">{m.subject || "(ohne Betreff)"}</div>
                   <div className="text-slate-500">{m.from_address} · {fmtDateTime(m.received_at)} · {companyName(m.company_id)}</div>
                 </div>
-                {canReview && <Button disabled={mutation.isPending} onClick={() => mutation.mutate([m.id])}>Erledigt</Button>}
+                <div className="flex gap-2">
+                  {isAdmin && m.from_address && (
+                    <Button variant="ghost" disabled={block.isPending} onClick={() => confirmBlock([m.id])}>Blockieren</Button>
+                  )}
+                  {canReview && <Button disabled={mutation.isPending} onClick={() => mutation.mutate([m.id])}>Erledigt</Button>}
+                </div>
               </div>
               {m.review_reason && <div className="mt-2"><Notice tone="warning">{m.review_reason}</Notice></div>}
               {m.detected_invoice_links.length > 0 && (

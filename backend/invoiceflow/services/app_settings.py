@@ -1,6 +1,7 @@
 """Laufzeit-Einstellungen in ``application_settings`` mit festen Schlüsseln und Validierung."""
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -36,6 +37,42 @@ def _choice(*options: str | None) -> Callable[[Any], str | None]:
     return check
 
 
+_SENDER_RE = re.compile(r"^([a-z0-9._%+\-]+@)?([a-z0-9\-]+\.)+[a-z]{2,}$")
+
+
+def _sender_list(v: Any) -> list[str]:
+    """Liste aus Domains (``paypal.de``) oder Adressen (``service@paypal.de``), normalisiert."""
+    if isinstance(v, str):
+        v = [part for part in re.split(r"[,;\s]+", v) if part]
+    if not isinstance(v, list) or len(v) > 200:
+        raise ValueError("erwartet eine Liste von Domains oder E-Mail-Adressen (max. 200)")
+    out: list[str] = []
+    for item in v:
+        if not isinstance(item, str):
+            raise ValueError("erwartet Domains oder E-Mail-Adressen")
+        entry = item.strip().lower().lstrip("@")
+        if not _SENDER_RE.fullmatch(entry):
+            raise ValueError(f"ungültiger Eintrag: {item!r}")
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
+def sender_matches(address: str | None, entries: list[str]) -> bool:
+    """Adresse passt exakt zu einem Adress-Eintrag oder gehört zur Domain (inkl. Subdomains)."""
+    if not address or "@" not in address:
+        return False
+    address = address.strip().lower()
+    domain = address.rsplit("@", 1)[1]
+    for entry in entries:
+        if "@" in entry:
+            if address == entry:
+                return True
+        elif domain == entry or domain.endswith("." + entry):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class SettingSpec:
     default: Any
@@ -65,6 +102,11 @@ SETTINGS: dict[str, SettingSpec] = {
         90, _int_range(50, 100), "KI-Ergebnisse darunter gehen in die manuelle Prüfung."
     ),
     "ocr.provider": SettingSpec(None, _choice(None, "tesseract", "external"), "OCR für Scan-PDFs."),
+    "mail.blocked_senders": SettingSpec(
+        [], _sender_list,
+        "Blockierte Absender (Adresse oder Domain, für alle Postfächer): Mails von ihnen werden beim Abruf "
+        "übersprungen – weder gespeichert noch angezeigt. Einträge entstehen über „Absender blockieren“ in der Prüfung.",
+    ),
     "attachments.max_size_mb": SettingSpec(25, _int_range(1, 100), "Maximale Größe je Anhang."),
     "imap.max_message_size_mb": SettingSpec(
         50, _int_range(1, 200), "Größere Nachrichten werden nicht heruntergeladen, sondern zur Prüfung markiert."

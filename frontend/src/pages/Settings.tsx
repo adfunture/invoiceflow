@@ -6,6 +6,7 @@ import { Button, Card, ErrorBox, Field, Input, PageHeader, Select, Spinner } fro
 
 const LABELS: Record<string, string> = {
   "datev.test_mode": "DATEV-Testmodus",
+  "mail.blocked_senders": "Blockierte Absender",
   "datev.upload_mail_zugferd_enabled": "ZUGFeRD per Upload Mail senden",
   "datev.max_mail_size_mb": "Max. Mailgröße an DATEV (MB)",
   "datev.max_attempts": "Versuche bei vorübergehenden SMTP-Fehlern",
@@ -47,14 +48,17 @@ export function SettingsPage() {
 
 function SettingRow({ s, editable }: { s: Setting; editable: boolean }) {
   const qc = useQueryClient();
-  const [value, setValue] = useState<string>(s.value === null ? "" : String(s.value));
+  const isList = Array.isArray(s.default);
+  const shown = (v: unknown) => (v === null ? "" : Array.isArray(v) ? v.join(", ") : String(v));
+  const [value, setValue] = useState<string>(shown(s.value));
   const mut = useMutation({
     mutationFn: (v: unknown) => put(`/api/settings/${s.key}`, { value: v }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
   const isBool = typeof s.default === "boolean";
   const isInt = typeof s.default === "number";
-  const save = () => mut.mutate(isInt ? Number(value) : value === "" ? null : value);
+  const save = () => mut.mutate(
+    isList ? value.split(/[,;\s]+/).filter(Boolean) : isInt ? Number(value) : value === "" ? null : value);
   const sensitive = s.key === "ai.enabled" && s.value === false;
 
   return (
@@ -76,8 +80,10 @@ function SettingRow({ s, editable }: { s: Setting; editable: boolean }) {
           </Select>
         ) : (
           <>
-            <Input disabled={!editable} inputMode="numeric" value={value} onChange={(e) => setValue(e.target.value)} />
-            {editable && <Button onClick={save} disabled={mut.isPending || value === String(s.value)}>Speichern</Button>}
+            <Input disabled={!editable} inputMode={isInt ? "numeric" : "text"} value={value}
+              placeholder={isList ? "z. B. service@paypal.de, newsletter.example" : undefined}
+              onChange={(e) => setValue(e.target.value)} />
+            {editable && <Button onClick={save} disabled={mut.isPending || value === shown(s.value)}>Speichern</Button>}
           </>
         )}
       </div>

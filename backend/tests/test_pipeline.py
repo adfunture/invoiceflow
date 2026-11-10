@@ -70,8 +70,10 @@ def processor(ai=None, ocr=None) -> DocumentProcessor:
 _uid_counter = iter(range(1, 10_000))
 
 
-def deliver(accounts, attachments, mailbox=INFO, subject="Rechnung", body="Anbei die Rechnung.", hours=None):
-    raw = build_email(subject, body=body, attachments=attachments, message_id=f"<m{next(_uid_counter)}@test>")
+def deliver(accounts, attachments, mailbox=INFO, subject="Rechnung", body="Anbei die Rechnung.", hours=None,
+            sender="buchhaltung@lieferant.example"):
+    raw = build_email(subject, sender=sender, body=body, attachments=attachments,
+                      message_id=f"<m{next(_uid_counter)}@test>")
     accounts[mailbox].deliver(raw, ON_START + timedelta(hours=hours or next(_uid_counter)))
     return raw
 
@@ -290,6 +292,38 @@ def test_mail_without_attachment_but_link_goes_to_review(accounts):
     process(accounts)
     msg = messages()[0]
     assert msg.status == EmailMessageStatus.manual_review and "nicht automatisch abgerufen" in msg.review_reason
+
+
+def test_blocked_sender_is_not_imported(accounts):
+    """Blockierte Absender (Adresse oder Domain) werden beim Abruf übersprungen, andere normal importiert."""
+    with get_sessionmaker()() as s:
+        app_settings.set_setting(s, "mail.blocked_senders", ["service@paypal.de", "newsletter.example"])
+        s.commit()
+    body = "Zahlungsbeleg ansehen: https://www.paypal.com/unifiedtransactions/details/payment/X?link_ref=receipt"
+    deliver(accounts, [pdf_att(invoice_lines("PP-1"))], subject="Zahlungseingang", body=body, sender="Service@PayPal.de")
+    deliver(accounts, [], subject="Rechnung", body=body, sender="info@mail.newsletter.example")
+    deliver(accounts, [], subject="Rechnung", body=body, sender="service@paypal.de.evil.example")
+    process(accounts)
+    msgs = messages()
+    assert [m.from_address for m in msgs] == ["service@paypal.de.evil.example"]
+    assert msgs[0].status == EmailMessageStatus.manual_review
+    assert documents() == []
+
+
+def test_notification_sender_setting_validation():
+    from invoiceflow.services.app_settings import SETTINGS, sender_matches
+
+    validate = SETTINGS["mail.blocked_senders"].validate
+    assert validate("PayPal.de, @paypal.com; service@Klarna.com") == ["paypal.de", "paypal.com", "service@klarna.com"]
+    assert validate([]) == []
+    for bad in (["nicht gültig"], [1], "x"):
+        with pytest.raises(ValueError):
+            validate(bad)
+    entries = ["paypal.de", "service@klarna.com"]
+    assert sender_matches("info@mail.paypal.de", entries)
+    assert not sender_matches("info@notpaypal.de", entries)
+    assert sender_matches("SERVICE@klarna.com", entries) and not sender_matches("other@klarna.com", entries)
+    assert not sender_matches(None, entries)
 
 
 def test_plain_mail_is_not_imported(accounts):

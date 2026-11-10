@@ -127,3 +127,40 @@ def test_bulk_resolve_messages(admin, monkeypatch):
                       json={"message_ids": [*ids, 999_999], "outcome": "no_invoice", "reason": "Manuell geprüft"}).json()
     assert sorted(body["resolved"]) == sorted(ids) and body["failed"] == [999_999]
     assert {m.status for m in messages()} == {"no_invoice"}
+
+
+def test_block_senders_resolves_open_mails_and_stops_import(admin, monkeypatch):
+    from invoiceflow.services import app_settings
+
+    from .test_pipeline import deliver, messages, process
+
+    monkeypatch.setenv("INVOICEFLOW_SECRET_IMAP_ADFUNTURE_INFO", "richtig")
+    with get_sessionmaker()() as s:
+        s.execute(update(Mailbox).where(Mailbox.email_address == INFO).values(is_active=True))
+        s.commit()
+    accounts = {INFO: FakeAccount(), "invoice@adfunture.de": FakeAccount()}
+    body_text = "Zahlungsbeleg: https://www.paypal.com/unifiedtransactions/details/payment/1"
+    deliver(accounts, [], subject="Zahlungseingang 1", body=body_text, sender="service@paypal.de")
+    deliver(accounts, [], subject="Zahlungseingang 2", body=body_text, sender="Service@PayPal.de")
+    deliver(accounts, [], body="Rechnung: https://portal.example.com/invoice/3", sender="buchhaltung@lieferant.example")
+    process(accounts)
+    first, second, other = messages()
+
+    make_user("pruefer3@adfunture.de", UserRole.reviewer, ("adfunture",))
+    reviewer = ApiClient()
+    reviewer.login("pruefer3@adfunture.de")
+    assert reviewer.post("/api/email-messages/block-senders", json={"message_ids": [first.id]}).status_code == 403
+
+    body = admin.post("/api/email-messages/block-senders", json={"message_ids": [first.id, 999_999]}).json()
+    assert body["blocked"] == ["service@paypal.de"] and body["failed"] == [999_999]
+    assert sorted(body["resolved"]) == sorted([first.id, second.id])
+    statuses = {m.id: m.status for m in messages()}
+    assert statuses[first.id] == statuses[second.id] == "no_invoice" and statuses[other.id] == "manual_review"
+    with get_sessionmaker()() as s:
+        assert app_settings.get_setting(s, "mail.blocked_senders") == ["service@paypal.de"]
+    log = admin.get("/api/audit-logs", params={"entity_type": "setting"}).json()[0]
+    assert log["action"] == "mail.senders_blocked" and log["details"]["added"] == ["service@paypal.de"]
+
+    deliver(accounts, [], subject="Zahlungseingang 3", body=body_text, sender="service@paypal.de")
+    process(accounts)
+    assert len(messages()) == 3

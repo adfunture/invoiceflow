@@ -59,7 +59,7 @@ class FolderResult:
     imported: int = 0
     already_known: int = 0
     before_start: int = 0
-    irrelevant: int = 0  # ohne Anhang und Rechnungslink oder DATEV-Quittung, nicht importiert
+    irrelevant: int = 0  # ohne Anhang und Rechnungslink, DATEV-Quittung oder blockierter Absender, nicht importiert
     uidvalidity_changed: bool = False
 
 
@@ -175,6 +175,7 @@ class MailboxSyncer:
             company_slug = db.scalar(select(Company.slug).where(Company.id == mailbox.company_id))
             max_attachment = int(app_settings.get_setting(db, "attachments.max_size_mb", mailbox.company_id)) * 1024 * 1024
             max_message = int(app_settings.get_setting(db, "imap.max_message_size_mb", mailbox.company_id)) * 1024 * 1024
+            blocked = list(app_settings.get_setting(db, "mail.blocked_senders", mailbox.company_id) or [])
             db.expunge(mailbox)
 
         result = SyncResult(mailbox_id, "ok")
@@ -192,7 +193,7 @@ class MailboxSyncer:
                 for name in folder_names:
                     try:
                         result.folders.append(
-                            self._sync_folder(server, mailbox, company_slug, name, max_attachment, max_message)
+                            self._sync_folder(server, mailbox, company_slug, name, max_attachment, max_message, blocked)
                         )
                     except MailServerError as exc:
                         # Ein defekter Ordner hält die übrigen nicht auf; Fortschritt bleibt erhalten.
@@ -283,7 +284,7 @@ class MailboxSyncer:
             db.commit()
 
     def _sync_folder(self, server: MailServer, mailbox: Mailbox, company_slug: str, folder: str,
-                     max_attachment: int, max_message: int) -> FolderResult:
+                     max_attachment: int, max_message: int, blocked: list[str]) -> FolderResult:
         result = FolderResult(folder)
         info = server.select_folder(folder)
         with self.sessions() as db:
@@ -318,7 +319,7 @@ class MailboxSyncer:
                     self._advance(state_id, uid)
                     continue
                 outcome = self._import_one(server, mailbox, company_slug, state_id, folder, info.uidvalidity, meta,
-                                           max_attachment, max_message)
+                                           max_attachment, max_message, blocked)
                 if outcome == "imported":
                     result.imported += 1
                 elif outcome == "before_start":
@@ -352,7 +353,8 @@ class MailboxSyncer:
             s.commit()
 
     def _import_one(self, server: MailServer, mailbox: Mailbox, company_slug: str, state_id: int, folder: str,
-                    uidvalidity: int, meta: MessageMeta, max_attachment: int, max_message: int) -> str:
+                    uidvalidity: int, meta: MessageMeta, max_attachment: int, max_message: int,
+                    blocked: list[str]) -> str:
         if meta.internaldate.tzinfo is None:
             raise MailServerError(f"INTERNALDATE ohne Zeitzone (UID {meta.uid})")
         if meta.internaldate < self.settings.import_start_at:
@@ -390,6 +392,11 @@ class MailboxSyncer:
                     self._advance(state_id, meta.uid, db)
                     db.commit()
                 log.info("datev_reply_processed", extra={"mailbox_id": mailbox.id, "transmissions": handled})
+                return "irrelevant"
+            if parsed is not None and app_settings.sender_matches(parsed.from_address, blocked):
+                # Absender steht auf der Blockliste (Einstellung mail.blocked_senders): nicht importieren.
+                self._advance(state_id, meta.uid)
+                log.info("blocked_sender_skipped", extra={"mailbox_id": mailbox.id, "uid": meta.uid})
                 return "irrelevant"
             if parsed is not None and not parsed.needs_processing:
                 # Weder Anhang noch Rechnungslink: keine Rechnungspost, wird weder gespeichert noch angezeigt.
