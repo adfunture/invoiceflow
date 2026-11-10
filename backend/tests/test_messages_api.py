@@ -164,3 +164,26 @@ def test_block_senders_resolves_open_mails_and_stops_import(admin, monkeypatch):
     deliver(accounts, [], subject="Zahlungseingang 3", body=body_text, sender="service@paypal.de")
     process(accounts)
     assert len(messages()) == 3
+
+
+def test_attachment_only_mode_keeps_mails_with_documents_open(admin, monkeypatch):
+    from invoiceflow.services import app_settings
+
+    from .test_pipeline import PDF, deliver, messages, process
+
+    monkeypatch.setenv("INVOICEFLOW_SECRET_IMAP_ADFUNTURE_INFO", "richtig")
+    with get_sessionmaker()() as s:
+        s.execute(update(Mailbox).where(Mailbox.email_address == INFO).values(is_active=True))
+        s.commit()
+    accounts = {INFO: FakeAccount(), "invoice@adfunture.de": FakeAccount()}
+    deliver(accounts, [], subject="Zahlungseingang", body="Zahlungsbeleg: https://www.paypal.com/x/payment/1",
+            sender="service@paypal.de")
+    deliver(accounts, [("kaputt.pdf", b"%PDF-1.4 kaputt", PDF)], subject="Beleg", sender="service@paypal.de")
+    process(accounts)
+    note, with_doc = messages()
+    body = admin.post("/api/email-messages/block-senders",
+                      json={"message_ids": [note.id], "mode": "attachment_only"}).json()
+    assert body["blocked"] == ["service@paypal.de"] and note.id in body["resolved"] and with_doc.id not in body["resolved"]
+    with get_sessionmaker()() as s:
+        assert app_settings.get_setting(s, "mail.attachment_only_senders") == ["service@paypal.de"]
+        assert app_settings.get_setting(s, "mail.blocked_senders") == []

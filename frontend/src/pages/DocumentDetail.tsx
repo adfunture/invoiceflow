@@ -220,6 +220,8 @@ function ReviewDialog({ doc, mode, onClose, onDone }: {
   // Freigabe heißt "ist eine Rechnung"; unklare Art wird beim Freigeben zur Rechnung.
   const [docType, setDocType] = useState(INVOICE_LIKE.includes(detectedType) ? detectedType : "invoice");
   const [values, setValues] = useState<Record<string, string>>({});
+  // Lernen: unklare Belege dieses Absenders künftig automatisch als Rechnung einstufen.
+  const [rememberSender, setRememberSender] = useState(false);
   const mutation = useMutation({
     mutationFn: () => {
       const corrections: Record<string, string | null> = {};
@@ -232,6 +234,7 @@ function ReviewDialog({ doc, mode, onClose, onDone }: {
         reason,
         duplicate_of_document_id: mode === "duplicate" ? Number(dupOf) : undefined,
         corrections: mode === "approve" && Object.keys(corrections).length ? corrections : undefined,
+        remember_sender: mode === "approve" && rememberSender,
       });
     },
     onSuccess: onDone,
@@ -257,6 +260,15 @@ function ReviewDialog({ doc, mode, onClose, onDone }: {
               {INVOICE_LIKE.map((k) => <option key={k} value={k}>{DOCUMENT_TYPE[k]}</option>)}
             </Select>
           </Field>
+          {doc.message_from && (
+            <label className="flex items-start gap-2 text-sm text-slate-600">
+              <input type="checkbox" className="mt-1" checked={rememberSender} onChange={(e) => setRememberSender(e.target.checked)} />
+              <span>
+                Belege von <b>{doc.message_from}</b> künftig als Rechnung erkennen (Pflichtangaben und Dubletten
+                werden weiter geprüft; aufheben unter Einstellungen → Rechnungsabsender).
+              </span>
+            </label>
+          )}
           <details className="rounded border border-slate-200 px-3 py-2 text-sm">
             <summary className="cursor-pointer text-slate-600">Rechnungsdaten korrigieren (optional)</summary>
             <div className="mt-3 grid grid-cols-2 gap-3">

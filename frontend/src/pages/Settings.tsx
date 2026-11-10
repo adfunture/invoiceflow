@@ -7,6 +7,8 @@ import { Button, Card, ErrorBox, Field, Input, PageHeader, Select, Spinner } fro
 const LABELS: Record<string, string> = {
   "datev.test_mode": "DATEV-Testmodus",
   "mail.blocked_senders": "Blockierte Absender",
+  "mail.attachment_only_senders": "Absender nur mit Anhang",
+  "recognition.invoice_senders": "Rechnungsabsender",
   "datev.upload_mail_zugferd_enabled": "ZUGFeRD per Upload Mail senden",
   "datev.max_mail_size_mb": "Max. Mailgröße an DATEV (MB)",
   "datev.max_attempts": "Versuche bei vorübergehenden SMTP-Fehlern",

@@ -66,9 +66,11 @@ export default defineRailway(() => {
     ALERT_TELEGRAM_CHAT_ID: preserve(),
     ALERT_TELEGRAM_TOKEN_REF: preserve(),
     INVOICEFLOW_SECRET_TELEGRAM_BOT: preserve(),
-    // KI-Fallback (Standard aus; erst nach AV-Vertrag)
-    ANTHROPIC_API_KEY: preserve(),
   };
+
+  // KI-Fallback (Standard aus; erst nach AV-Vertrag). Der Wert liegt einmal als Shared Variable im Projekt und
+  // wird nur dort referenziert, wo er gebraucht wird: web und worker-processing (Erkennung läuft im Worker).
+  const aiEnv = { ANTHROPIC_API_KEY: "${{shared.ANTHROPIC_API_KEY}}" };
 
   const web = service("web", {
     source,
@@ -79,17 +81,17 @@ export default defineRailway(() => {
     healthcheck: "/health/ready",
     healthcheckTimeout: 120,
     replicas: EU,
-    env: { ...env, PORT: "8080" },
+    env: { ...env, ...aiEnv, PORT: "8080" },
   });
 
-  const worker = (name: string, kind: string, drainingSeconds: number) =>
+  const worker = (name: string, kind: string, drainingSeconds: number, extraEnv: Record<string, string> = {}) =>
     service(name, {
       source,
       build,
       start: `invoiceflow worker ${kind}`,
       replicas: EU, // genau eine Instanz
       deploy: { restartPolicyType: "ALWAYS", drainingSeconds },
-      env,
+      env: { ...env, ...extraEnv },
     });
 
   const cron = (name: string, command: string, schedule: string) =>
@@ -107,7 +109,7 @@ export default defineRailway(() => {
       web,
       group("Worker", [
         worker("worker-imap", "imap", 60),
-        worker("worker-processing", "processing", 120),
+        worker("worker-processing", "processing", 120, aiEnv),
         worker("worker-datev", "datev", 180),
       ]),
       group("Betrieb", [

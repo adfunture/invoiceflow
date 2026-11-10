@@ -29,6 +29,7 @@ from invoiceflow.config import Settings
 from invoiceflow.db.enums import DocumentStatus, JobStatus, TransmissionStatus
 from invoiceflow.db.models import (
     AlertState,
+    AuditLog,
     DatevDestination,
     DatevTransmission,
     Document,
@@ -44,6 +45,78 @@ log = logging.getLogger("invoiceflow.monitor")
 
 WORKER_TYPES = ("imap", "processing", "datev")
 RENOTIFY = {"critical": timedelta(hours=6), "warning": timedelta(hours=24)}
+
+
+@dataclass(frozen=True)
+class OpsJob:
+    """Betriebs-Cron, dessen Läufe im Audit-Log stehen (Erfolg bzw. Fehlschlag)."""
+
+    key: str
+    label: str
+    ok_action: str
+    failed_action: str
+    max_age: timedelta
+    never_ran_severity: str = "critical"
+
+
+OPS_JOBS = (
+    # Backup läuft täglich um 01:30 UTC – 26 h lassen Spielraum für einen verspäteten Lauf.
+    OpsJob("ops:backup", "Datenbank-Backup", "ops.backup_completed", "ops.backup_failed", timedelta(hours=26)),
+    # Wiederherstellungstest läuft wöchentlich (sonntags).
+    OpsJob("ops:restore_check", "Wiederherstellungstest", "ops.restore_check_passed", "ops.restore_check_failed",
+           timedelta(days=8), never_ran_severity="warning"),
+)
+
+
+def _processing_config_findings(db: Session, now: datetime) -> list[Finding]:
+    """KI/OCR eingeschaltet, aber dem Processing-Worker fehlt Schlüssel bzw. Programm."""
+    from invoiceflow.db.models import ApplicationSetting
+
+    row = db.execute(select(WorkerHeartbeat.details).where(
+        WorkerHeartbeat.worker_type == "processing", WorkerHeartbeat.last_beat_at > now - timedelta(minutes=10))
+        .order_by(WorkerHeartbeat.last_beat_at.desc()).limit(1)).first()
+    env = (row[0] or {}).get("env") if row else None
+    if not env:
+        return []
+    settings = {(k, cid): v for k, cid, v in db.execute(select(
+        ApplicationSetting.key, ApplicationSetting.company_id, ApplicationSetting.value))}
+    company_ids = {cid for _, cid in settings} | {None}
+
+    def effective(key: str, cid: int | None):
+        return settings.get((key, cid), settings.get((key, None)))
+
+    findings: list[Finding] = []
+    ai_on = any(effective("ai.enabled", c) and effective("ai.provider", c) == "anthropic" for c in company_ids)
+    if ai_on and not env.get("ai_key"):
+        findings.append(Finding("config:ai_key", "warning",
+                                "KI-Fallback ist eingeschaltet, aber worker-processing hat keinen ANTHROPIC_API_KEY"))
+    if any(effective("ocr.provider", c) == "tesseract" for c in company_ids) and not env.get("tesseract"):
+        findings.append(Finding("config:tesseract", "warning",
+                                "OCR (Tesseract) ist eingestellt, aber im worker-processing nicht installiert"))
+    return findings
+
+
+def _ops_findings(db: Session, settings: Settings, now: datetime) -> list[Finding]:
+    findings: list[Finding] = []
+    for job in OPS_JOBS:
+        last = db.execute(select(AuditLog.action, AuditLog.occurred_at)
+                          .where(AuditLog.action.in_((job.ok_action, job.failed_action)))
+                          .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc()).limit(1)).first()
+        if last is None:
+            # Außerhalb der Produktion laufen die Crons nicht – dort kein Alarm für "nie gelaufen".
+            if settings.is_production:
+                findings.append(Finding(job.key, job.never_ran_severity, f"{job.label} ist noch nie gelaufen"))
+            continue
+        action, at = last
+        if action == job.failed_action:
+            findings.append(Finding(job.key, "critical",
+                                    f"{job.label} ist fehlgeschlagen ({at:%d.%m.%Y %H:%M} UTC) – Logs des Crons prüfen"))
+            continue
+        last_ok = db.scalar(select(func.max(AuditLog.occurred_at)).where(AuditLog.action == job.ok_action))
+        if last_ok < now - job.max_age:
+            hours = int((now - last_ok).total_seconds() // 3600)
+            findings.append(Finding(job.key, "critical", f"{job.label}: letzter erfolgreicher Lauf vor {hours} Stunden"))
+    return findings
 
 
 @dataclass(frozen=True)
@@ -121,6 +194,12 @@ def collect_findings(db: Session, settings: Settings, now: datetime | None = Non
         if stuck:
             findings.append(Finding("datev:stuck", "warning",
                                     f"{stuck} Beleg(e) warten trotz Auto-Versand seit über 1 Tag (Grund in der Übertragung)"))
+
+    # Konfiguration der Verarbeitung passt zu den Einstellungen?
+    findings += _processing_config_findings(db, now)
+
+    # Backups und Wiederherstellungstest
+    findings += _ops_findings(db, settings, now)
 
     # Rückstände
     review = _count(db, Document, Document.status == DocumentStatus.manual_review, Document.updated_at < now - timedelta(days=2))

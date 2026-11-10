@@ -42,6 +42,20 @@ from invoiceflow.storage import DocumentStore, StorageError
 log = logging.getLogger("invoiceflow.sync")
 
 
+@dataclass(frozen=True)
+class SenderRules:
+    """Absenderregeln aus den Einstellungen mail.blocked_senders und mail.attachment_only_senders."""
+
+    blocked: list[str]
+    attachment_only: list[str]
+
+    def skips(self, parsed: ParsedMessage) -> bool:
+        if app_settings.sender_matches(parsed.from_address, self.blocked):
+            return True
+        has_attachment = any(a.needs_processing for a in parsed.attachments)
+        return not has_attachment and app_settings.sender_matches(parsed.from_address, self.attachment_only)
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -175,7 +189,9 @@ class MailboxSyncer:
             company_slug = db.scalar(select(Company.slug).where(Company.id == mailbox.company_id))
             max_attachment = int(app_settings.get_setting(db, "attachments.max_size_mb", mailbox.company_id)) * 1024 * 1024
             max_message = int(app_settings.get_setting(db, "imap.max_message_size_mb", mailbox.company_id)) * 1024 * 1024
-            blocked = list(app_settings.get_setting(db, "mail.blocked_senders", mailbox.company_id) or [])
+            blocked = SenderRules(
+                list(app_settings.get_setting(db, "mail.blocked_senders", mailbox.company_id) or []),
+                list(app_settings.get_setting(db, "mail.attachment_only_senders", mailbox.company_id) or []))
             db.expunge(mailbox)
 
         result = SyncResult(mailbox_id, "ok")
@@ -284,7 +300,7 @@ class MailboxSyncer:
             db.commit()
 
     def _sync_folder(self, server: MailServer, mailbox: Mailbox, company_slug: str, folder: str,
-                     max_attachment: int, max_message: int, blocked: list[str]) -> FolderResult:
+                     max_attachment: int, max_message: int, blocked: SenderRules) -> FolderResult:
         result = FolderResult(folder)
         info = server.select_folder(folder)
         with self.sessions() as db:
@@ -354,7 +370,7 @@ class MailboxSyncer:
 
     def _import_one(self, server: MailServer, mailbox: Mailbox, company_slug: str, state_id: int, folder: str,
                     uidvalidity: int, meta: MessageMeta, max_attachment: int, max_message: int,
-                    blocked: list[str]) -> str:
+                    blocked: SenderRules) -> str:
         if meta.internaldate.tzinfo is None:
             raise MailServerError(f"INTERNALDATE ohne Zeitzone (UID {meta.uid})")
         if meta.internaldate < self.settings.import_start_at:
@@ -393,8 +409,8 @@ class MailboxSyncer:
                     db.commit()
                 log.info("datev_reply_processed", extra={"mailbox_id": mailbox.id, "transmissions": handled})
                 return "irrelevant"
-            if parsed is not None and app_settings.sender_matches(parsed.from_address, blocked):
-                # Absender steht auf der Blockliste (Einstellung mail.blocked_senders): nicht importieren.
+            if parsed is not None and blocked.skips(parsed):
+                # Absender blockiert bzw. "nur mit Anhang" und kein verwertbarer Anhang: nicht importieren.
                 self._advance(state_id, meta.uid)
                 log.info("blocked_sender_skipped", extra={"mailbox_id": mailbox.id, "uid": meta.uid})
                 return "irrelevant"

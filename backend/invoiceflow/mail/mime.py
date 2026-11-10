@@ -12,6 +12,7 @@ import binascii
 import quopri
 import re
 import unicodedata
+import urllib.parse
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -68,6 +69,24 @@ _INVOICE_WORDS = re.compile(
 )
 _URL_RE = re.compile(r"https?://[^\s<>\"'()\[\]{}]+", re.I)
 _LINK_HINT = re.compile(r"invoice|rechnung|billing|bill|beleg|download|receipt|quittung|\.pdf", re.I)
+# Links, die nie zu einer Rechnung führen: soziale Netzwerke, Hilfe, Rechtliches, Abmelden, App-Stores, Bilder.
+_NOISE_HOSTS = re.compile(
+    r"(^|\.)(twitter\.com|x\.com|facebook\.com|fb\.com|instagram\.com|linkedin\.com|youtube\.com|youtu\.be|"
+    r"xing\.com|tiktok\.com|pinterest\.[a-z.]+|apps\.apple\.com|play\.google\.com|itunes\.apple\.com)$", re.I)
+_NOISE_PATH = re.compile(
+    r"(^|[/_.\-])(help|hilfe|smarthelp|support|faq|kontakt|contact|privacy|datenschutz|impressum|imprint|legal|agb|"
+    r"terms|nutzungsbedingungen|unsubscribe|abmelden|abbestellen|newsletter|preferences|einstellungen|settings|"
+    r"safety|security|sicherheit|mobile-apps|apps|social)([/_.\-]|$)", re.I)
+_NOISE_FILE = re.compile(r"\.(png|jpe?g|gif|svg|webp|css|js|ico)$", re.I)
+_STRONG_HINT = re.compile(r"invoice|rechnung|receipt|beleg|quittung|\.pdf", re.I)
+
+
+def _is_noise_link(url: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    host, path = (parsed.hostname or "").lower(), parsed.path or "/"
+    if _NOISE_HOSTS.search(host) or _NOISE_FILE.search(path):
+        return True
+    return bool(_NOISE_PATH.search(path)) and not _STRONG_HINT.search(path)
 
 
 @dataclass
@@ -235,6 +254,8 @@ def _invoice_links(urls: list[str], text: str) -> list[str]:
     for url in urls:
         url = url.strip().rstrip(".,;:!?")
         if not url.lower().startswith(("http://", "https://")) or len(url) > 2000:
+            continue
+        if _is_noise_link(url):
             continue
         if (_LINK_HINT.search(url) or mentions) and url not in found:
             found.append(url)

@@ -46,6 +46,19 @@ _TITLE_PATTERNS: dict[DocumentType, re.Pattern[str]] = {
 _DUNNING_ANYWHERE = re.compile(r"^\s*(?:\d\.\s*)?(?:mahnung|zahlungserinnerung|payment\s+reminder)\b", re.I | re.M)
 _CORRECTION = re.compile(r"\b(rechnungskorrektur|korrekturrechnung|korrigierte\s+rechnung|corrected\s+invoice)\b", re.I)
 _PROFORMA = re.compile(r"\bpro\s*-?\s*forma\b", re.I)
+_REVERSE_CHARGE = re.compile(
+    r"reverse[\s-]*charge|steuerschuldnerschaft\s+des\s+leistungsempf|§\s*13b\s*ustg|"
+    r"vat\s+(?:is\s+)?not\s+(?:applicable|charged)", re.I)
+
+
+def _missing_vat_note(text: str, currency: str | None) -> str:
+    """Fehlende USt ist bei Leistungen aus dem Ausland normal (Reverse Charge) – Hinweis statt Fehlerverdacht."""
+    if _REVERSE_CHARGE.search(text):
+        return "Keine USt ausgewiesen – Reverse Charge laut Beleg (§ 13b UStG, Steuer bucht die Buchhaltung)"
+    if currency and currency != "EUR":
+        return (f"Keine USt ausgewiesen – Beleg in {currency}, vermutlich Leistung aus dem Ausland "
+                "(Reverse Charge, § 13b UStG)")
+    return "Umsatzsteuerbetrag nicht gefunden"
 
 _NUMBER_LABEL = re.compile(
     r"(?:rechnungs?[-\s]*(?:nummer|nr\.?)|rechnung\s+(?:nr\.?|nummer)|beleg[-\s]*(?:nummer|nr\.?)|honorarnote\s*(?:nr\.?|nummer)|"
@@ -188,8 +201,6 @@ def extract_fields(text: str, inv: ExtractedInvoice, own_aliases: list[str], own
     inv.set("gross_amount", _first_amount(_GROSS, text, last=True), source)
     inv.set("net_amount", _first_amount(_NET, text, last=True), source)
     inv.set("tax_amount", _first_amount(_TAX, text, last=True), source)
-    if inv.gross_amount is not None and inv.net_amount is not None and inv.tax_amount is None:
-        inv.warnings.append("Umsatzsteuerbetrag nicht gefunden")
     if inv.document_type in (DocumentType.credit_note, DocumentType.cancellation):
         # Beträge positiv speichern; die Art steckt im Dokumenttyp.
         for name in ("net_amount", "tax_amount", "gross_amount"):
@@ -200,6 +211,8 @@ def extract_fields(text: str, inv: ExtractedInvoice, own_aliases: list[str], own
     currencies = Counter({"€": "EUR", "EURO": "EUR", "$": "USD"}.get(c.upper(), c.upper()) for c in _CURRENCY.findall(text))
     if currencies:
         inv.set("currency", currencies.most_common(1)[0][0], source)
+    if inv.gross_amount is not None and inv.net_amount is not None and inv.tax_amount is None:
+        inv.warnings.append(_missing_vat_note(text, inv.currency))
 
     own_vat = {normalize_vat_id(v) for v in own_vat_ids if v}
     recipient_lines = _recipient_block(text, own_aliases)

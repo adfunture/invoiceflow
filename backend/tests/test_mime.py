@@ -191,3 +191,22 @@ def test_legacy_excel_is_not_dangerous_but_unknown_ole_is():
     assert "Office-Datei" in msg.attachments[0].rejection_reason and not msg.needs_processing
     msg = parse(build_email(attachments=[("rechnung.pdf.bin", ole, "application/octet-stream")]))
     assert msg.needs_processing  # OLE ohne Office-Endung bleibt verdächtig
+
+
+def test_noise_links_are_not_invoice_links():
+    """PayPal-Benachrichtigung: nur der Transaktionslink zählt, nicht Hilfe, Sicherheit, Apps oder soziale Netzwerke."""
+    q = "?v=1&utm_source=unp&link_ref=x"
+    links = [
+        "https://www.paypal.com/unifiedtransactions/details/payment/64D78795BY504915U" + q,
+        "https://www.paypal.com/de/smarthelp/home" + q,
+        "https://www.paypal.com/de/webapps/mpp/paypal-safety-and-security" + q,
+        "https://www.paypal.com/de/webapps/mpp/mobile-apps" + q,
+        "https://twitter.com/PayPal" + q,
+        "https://www.instagram.com/paypal/" + q,
+        "https://www.facebook.com/PayPalUSA" + q,
+        "https://www.paypal.com/de/legalhub/privacy-full",
+        "https://cdn.example.com/logo.png",
+        "https://portal.example.com/help/invoice/123.pdf",
+    ]
+    msg = parse(build_email(subject="Zahlungsbeleg", body="Ihr Zahlungsbeleg:\n" + "\n".join(links), attachments=[]))
+    assert msg.invoice_links == [links[0], links[-1]]

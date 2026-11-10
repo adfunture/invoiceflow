@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from invoiceflow.api.deps import AuthContext, ensure_company, get_db, require_admin, require_reviewer, require_viewer
 from invoiceflow.api.schemas import AttachmentOut, EmailMessageDetailOut, EmailMessageOut, StrictInput, WorkerOut
 from invoiceflow.db.enums import EmailMessageStatus
-from invoiceflow.db.models import EmailAttachment, EmailMessage, WorkerHeartbeat
+from invoiceflow.db.models import Document, EmailAttachment, EmailMessage, WorkerHeartbeat
 from invoiceflow.services import app_settings
 from invoiceflow.services.audit import audit
 
@@ -126,6 +126,11 @@ def resolve_message(message_id: int, body: MessageResolveIn, auth: AuthContext =
 
 class BlockSendersIn(StrictInput):
     message_ids: list[int] = Field(min_length=1, max_length=500)
+    # block: nichts mehr importieren; attachment_only: nur noch Mails mit Anhang importieren
+    mode: Literal["block", "attachment_only"] = "block"
+
+
+SENDER_RULE_SETTING = {"block": "mail.blocked_senders", "attachment_only": "mail.attachment_only_senders"}
 
 
 class BlockSendersOut(BaseModel):
@@ -154,20 +159,26 @@ def block_senders(body: BlockSendersIn, auth: AuthContext = Depends(require_admi
     if not addresses:
         return BlockSendersOut(blocked=[], resolved=[], failed=failed)
 
-    current = list(app_settings.get_setting(db, "mail.blocked_senders") or [])
+    key = SENDER_RULE_SETTING[body.mode]
+    current = list(app_settings.get_setting(db, key) or [])
     new = [a for a in addresses if a not in current]
-    app_settings.set_setting(db, "mail.blocked_senders", current + new, user_id=auth.user.id)
-    audit(db, auth.actor, "mail.senders_blocked", entity_type="setting", entity_id="mail.blocked_senders",
-          details={"added": new, "already_blocked": [a for a in addresses if a in current]})
+    app_settings.set_setting(db, key, current + new, user_id=auth.user.id)
+    audit(db, auth.actor, "mail.senders_blocked", entity_type="setting", entity_id=key,
+          details={"mode": body.mode, "added": new, "already_listed": [a for a in addresses if a in current]})
 
     resolved: list[int] = []
-    open_ids = db.scalars(select(EmailMessage.id).where(
+    open_query = select(EmailMessage.id).where(
         EmailMessage.status == EmailMessageStatus.manual_review,
-        func.lower(EmailMessage.from_address).in_(addresses)).order_by(EmailMessage.id))
-    for message_id in list(open_ids):
+        func.lower(EmailMessage.from_address).in_(addresses))
+    if body.mode == "attachment_only":
+        # Nur Benachrichtigungen ganz ohne Anhang abschließen; Mails mit (auch kaputtem) Anhang bleiben in der Prüfung.
+        open_query = open_query.where(EmailMessage.attachment_count == 0,
+                                      ~select(Document.id).where(Document.email_message_id == EmailMessage.id).exists())
+    reason = "Absender blockiert" if body.mode == "block" else "Absender: nur Mails mit Anhang"
+    for message_id in list(db.scalars(open_query.order_by(EmailMessage.id))):
         try:
             with db.begin_nested():
-                _resolve(db, auth, message_id, "no_invoice", "Absender blockiert")
+                _resolve(db, auth, message_id, "no_invoice", reason)
             resolved.append(message_id)
         except HTTPException:
             failed.append(message_id)

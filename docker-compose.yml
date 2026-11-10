@@ -2,13 +2,16 @@
 # Danach: docker compose exec web invoiceflow create-user --email du@example.de --role admin
 services:
   db:
-    image: postgres:17
+    # Gleiche Major-Version wie Railway (18), damit pg_dump/pg_restore zum Server passen.
+    image: postgres:18
     environment:
       POSTGRES_USER: invoiceflow
       POSTGRES_PASSWORD: invoiceflow
       POSTGRES_DB: invoiceflow
     ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+    # Ab Postgres 18 liegt PGDATA versioniert unter /var/lib/postgresql/<major>/docker.
+    # Neues Volume, weil sich 17er-Daten nicht ohne pg_upgrade weiterverwenden lassen.
+    volumes: [pgdata18:/var/lib/postgresql]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U invoiceflow"]
       interval: 5s
@@ -67,5 +70,5 @@ services:
       web: {condition: service_started}
 
 volumes:
-  pgdata:
+  pgdata18:
   storage:

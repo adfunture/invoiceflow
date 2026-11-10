@@ -192,6 +192,9 @@ class DocumentProcessor:
             ai_provider = app_settings.get_setting(db, "ai.provider", doc.company_id)
             ai_min = int(app_settings.get_setting(db, "ai.min_confidence_percent", doc.company_id)) / 100
             ocr_provider = app_settings.get_setting(db, "ocr.provider", doc.company_id)
+            sender = db.scalar(select(EmailMessage.from_address).where(EmailMessage.id == doc.email_message_id))
+            invoice_sender = app_settings.sender_matches(
+                sender, app_settings.get_setting(db, "recognition.invoice_senders", doc.company_id) or [])
             storage_key, sha, mime, filename = doc.storage_key, doc.sha256, doc.mime_type, doc.original_filename
             db.commit()
 
@@ -202,6 +205,10 @@ class DocumentProcessor:
 
         analysis = self._analyze(data, mime, ctx, ocr_provider)
         inv = analysis.invoice
+        if inv is not None and invoice_sender and inv.document_type == DocumentType.unclear:
+            # Absenderregel (beim Freigeben gelernt): unklare Belege dieses Absenders sind Rechnungen.
+            inv.document_type = DocumentType.invoice
+            inv.warnings.append("Dokumentart über Absenderregel als Rechnung erkannt")
         if inv is not None and ai_enabled and _needs_ai(inv):
             self._ask_ai(analysis, ai_provider, ai_min)
         decision = decide(analysis, ctx, ai_min)

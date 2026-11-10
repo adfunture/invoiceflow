@@ -91,6 +91,18 @@ def cmd_user_admin(args: argparse.Namespace) -> int:
     return 0
 
 
+def _record_ops_failure(actor, action: str, exc: Exception) -> None:
+    """Fehlschlag eines Betriebs-Crons protokollieren, damit ops-monitor alarmiert."""
+    from invoiceflow.logging_setup import redact_text
+    from invoiceflow.services.audit import audit
+
+    try:
+        with session_scope() as db:
+            audit(db, actor, action, details={"error": redact_text(f"{type(exc).__name__}: {exc}")[:1000]})
+    except Exception:  # noqa: BLE001 – Protokollieren darf den eigentlichen Fehler nicht verdecken
+        pass
+
+
 def cmd_ops(args: argparse.Namespace) -> int:
     """Betriebsaufgaben (als Railway-Cron oder manuell)."""
     from invoiceflow.services.audit import Actor, audit
@@ -148,7 +160,11 @@ def cmd_ops(args: argparse.Namespace) -> int:
     if task == "backup":
         from invoiceflow.ops.backup import get_target, run_backup
 
-        result = run_backup(settings, get_target(settings))
+        try:
+            result = run_backup(settings, get_target(settings))
+        except Exception as exc:
+            _record_ops_failure(actor, "ops.backup_failed", exc)
+            raise
         with session_scope() as db:
             audit(db, actor, "ops.backup_completed", details={"key": result.key, "size_bytes": result.size_bytes,
                                                               "sha256": result.sha256, "deleted_old": len(result.deleted_old)})
@@ -158,7 +174,11 @@ def cmd_ops(args: argparse.Namespace) -> int:
     if task == "restore-check":
         from invoiceflow.ops.backup import get_target, restore_check
 
-        result = restore_check(settings, get_target(settings), args.key)
+        try:
+            result = restore_check(settings, get_target(settings), args.key)
+        except Exception as exc:
+            _record_ops_failure(actor, "ops.restore_check_failed", exc)
+            raise
         ok = not result.missing_tables
         with session_scope() as db:
             audit(db, actor, "ops.restore_check_passed" if ok else "ops.restore_check_failed",

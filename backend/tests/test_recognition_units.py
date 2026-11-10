@@ -302,3 +302,16 @@ def test_title_with_number_and_date_counts_as_invoice():
     extract_fields("\n".join(lines), inv, ADF, [])
     assert inv.document_type == DocumentType.invoice
     assert (inv.invoice_number, inv.invoice_date) == ("4711", date(2026, 11, 2))
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Invoice number INV-1\nSubtotal $10.98\nTotal $10.98\nAmount paid $10.98", "Beleg in USD"),
+    ("Rechnung RE-1\nNettobetrag 100,00 EUR\nGesamtbetrag 100,00 EUR\nSteuerschuldnerschaft des Leistungsempfängers",
+     "Reverse Charge laut Beleg"),
+    ("Rechnung RE-1\nNettobetrag 100,00 EUR\nGesamtbetrag 100,00 EUR", "Umsatzsteuerbetrag nicht gefunden"),
+])
+def test_missing_vat_note_recognises_foreign_and_reverse_charge(text, expected):
+    inv = ExtractedInvoice()
+    inv.document_type, inv.confidence, inv.is_correction = classify(text)
+    extract_fields(text, inv, ADF, [])
+    assert any(expected in w for w in inv.warnings), inv.warnings

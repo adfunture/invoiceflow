@@ -394,6 +394,8 @@ class ReviewIn(StrictInput):
     reason: str = Field(min_length=3, max_length=2000)
     duplicate_of_document_id: int | None = None
     corrections: dict[str, Any] | None = None
+    # Nur bei approve: Absender in recognition.invoice_senders aufnehmen
+    remember_sender: bool = False
 
 
 class BulkIgnoreIn(StrictInput):
@@ -408,6 +410,15 @@ class BulkFailureOut(BaseModel):
 
 class BulkIgnoreOut(BaseModel):
     ignored: list[int]
+    failed: list[BulkFailureOut]
+
+
+class BulkReprocessIn(StrictInput):
+    document_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class BulkReprocessOut(BaseModel):
+    queued: list[int]
     failed: list[BulkFailureOut]
 
 

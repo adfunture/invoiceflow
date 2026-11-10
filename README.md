@@ -92,7 +92,7 @@ schicken nie E-Mails an DATEV; `DATEV_ALLOW_REAL_SEND=true` ist in der
 Testumgebung per Konfigurationsprüfung verboten.
 
 Hinweis: PGlite ist ein Ein-Prozess-Postgres. Tests für echte Parallelität
-(zwei Worker, `SKIP LOCKED`) laufen deshalb in CI gegen PostgreSQL 17
+(zwei Worker, `SKIP LOCKED`) laufen deshalb in CI gegen PostgreSQL 18 (wie Railway)
 (`.github/workflows/ci.yml`).
 
 ## Sicherheitsprinzipien (Kurzfassung)

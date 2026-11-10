@@ -360,3 +360,68 @@ def test_cli_deactivate_user_revokes_sessions(monkeypatch):
     assert main(["user", "deactivate", "weg@adfunture.de"]) == 0
     assert client.get("/api/auth/me").status_code == 401
     assert client.login("weg@adfunture.de").status_code == 401
+
+
+def test_monitor_alerts_on_failed_or_stale_backup():
+    from datetime import UTC, datetime, timedelta
+
+    from invoiceflow.services.audit import audit
+
+    now = datetime.now(UTC)
+    prod = Settings(app_env=AppEnv.production, cookie_secure=True, storage_backend=StorageBackend.s3)
+    with get_sessionmaker()() as db:
+        findings = {f.key: f for f in collect_findings(db, prod, now)}
+        assert findings["ops:backup"].severity == "critical" and "noch nie" in findings["ops:backup"].message
+        assert findings["ops:restore_check"].severity == "warning"
+        # Testumgebung: ohne Läufe kein Alarm
+        assert "ops:backup" not in {f.key for f in collect_findings(db, SETTINGS, now)}
+
+        audit(db, ACTOR, "ops.backup_completed", details={})
+        audit(db, ACTOR, "ops.restore_check_passed", details={})
+        db.commit()
+        keys = {f.key for f in collect_findings(db, prod, now)}
+        assert "ops:backup" not in keys and "ops:restore_check" not in keys
+        stale = {f.key: f for f in collect_findings(db, prod, now + timedelta(hours=30))}
+        msg = stale["ops:backup"].message
+        assert ("vor 29 Stunden" in msg or "vor 30 Stunden" in msg) and "ops:restore_check" not in stale
+
+        audit(db, ACTOR, "ops.backup_failed", details={"error": "pg_dump: server version mismatch"})
+        db.commit()
+        failed = {f.key: f for f in collect_findings(db, SETTINGS, now)}
+        assert failed["ops:backup"].severity == "critical" and "fehlgeschlagen" in failed["ops:backup"].message
+
+
+def test_cli_backup_failure_is_recorded_for_monitor(monkeypatch):
+    from sqlalchemy import select
+
+    from invoiceflow.cli import main
+    from invoiceflow.db.models import AuditLog
+    from invoiceflow.ops import backup
+
+    def broken(*_a, **_k):
+        raise backup.BackupError("pg_dump fehlgeschlagen: server version mismatch")
+
+    monkeypatch.setattr(backup, "run_backup", broken)
+    monkeypatch.setattr(backup, "get_target", lambda _s: None)
+    with pytest.raises(backup.BackupError):
+        main(["ops", "backup"])
+    with get_sessionmaker()() as db:
+        row = db.scalar(select(AuditLog).where(AuditLog.action == "ops.backup_failed"))
+    assert row is not None and "version mismatch" in row.details["error"]
+
+
+def test_monitor_warns_when_ai_enabled_but_worker_has_no_key(monkeypatch):
+    from datetime import UTC, datetime
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    with get_sessionmaker()() as db:
+        heartbeat(db, "processing:test:1", "processing", datetime.now(UTC), {})
+        assert "config:ai_key" not in {f.key for f in collect_findings(db, SETTINGS)}
+        app_settings.set_setting(db, "ai.enabled", True)
+        app_settings.set_setting(db, "ai.provider", "anthropic")
+        db.commit()
+        assert "config:ai_key" in {f.key for f in collect_findings(db, SETTINGS)}
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        heartbeat(db, "processing:test:1", "processing", datetime.now(UTC), {})
+        assert "config:ai_key" not in {f.key for f in collect_findings(db, SETTINGS)}

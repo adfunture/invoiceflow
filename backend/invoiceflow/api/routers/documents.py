@@ -13,6 +13,8 @@ from invoiceflow.api.schemas import (
     BulkFailureOut,
     BulkIgnoreIn,
     BulkIgnoreOut,
+    BulkReprocessIn,
+    BulkReprocessOut,
     DocumentDetailOut,
     DocumentOut,
     DuplicateOut,
@@ -106,6 +108,23 @@ def bulk_ignore(body: BulkIgnoreIn, auth: AuthContext = Depends(require_reviewer
     return BulkIgnoreOut(ignored=ignored, failed=failed)
 
 
+@router.post("/bulk-reprocess", response_model=BulkReprocessOut)
+def bulk_reprocess(body: BulkReprocessIn, auth: AuthContext = Depends(require_reviewer),
+                   db: Session = Depends(get_db)) -> BulkReprocessOut:
+    """Mehrere Dokumente neu erkennen lassen (z. B. nach Einrichtung von KI/OCR). Nicht erlaubte werden gemeldet."""
+    queued: list[int] = []
+    failed: list[BulkFailureOut] = []
+    for doc_id in dict.fromkeys(body.document_ids):
+        try:
+            with db.begin_nested():
+                reprocess_svc.request_reprocess(db, doc_id, auth.actor, allowed_company_ids=auth.company_ids)
+            queued.append(doc_id)
+        except reprocess_svc.ReprocessError as exc:
+            failed.append(BulkFailureOut(document_id=doc_id, error=str(exc)))
+    db.commit()
+    return BulkReprocessOut(queued=queued, failed=failed)
+
+
 @router.get("/{doc_id}", response_model=DocumentDetailOut)
 def get_document(doc_id: int, auth: AuthContext = Depends(require_viewer), db: Session = Depends(get_db)) -> DocumentDetailOut:
     doc = _load(db, auth, doc_id)
@@ -154,8 +173,26 @@ def review(doc_id: int, body: ReviewIn, auth: AuthContext = Depends(require_revi
     except review_svc.ReviewError as exc:
         db.rollback()
         raise HTTPException(exc.status_code, str(exc)) from exc
+    if body.decision == "approve" and body.remember_sender:
+        _remember_invoice_sender(db, auth, doc_id)
     db.commit()
     return get_document(doc_id, auth, db)
+
+
+def _remember_invoice_sender(db: Session, auth: AuthContext, doc_id: int) -> None:
+    """Absender des Belegs als Rechnungsabsender merken (Einstellung recognition.invoice_senders)."""
+    from invoiceflow.services import app_settings
+
+    doc = db.get(Document, doc_id)
+    sender = (db.scalar(select(EmailMessage.from_address).where(EmailMessage.id == doc.email_message_id)) or "").lower()
+    if "@" not in sender:
+        return
+    current = list(app_settings.get_setting(db, "recognition.invoice_senders") or [])
+    if sender in current:
+        return
+    app_settings.set_setting(db, "recognition.invoice_senders", [*current, sender], user_id=auth.user.id)
+    audit(db, auth.actor, "recognition.invoice_sender_added", company_id=doc.company_id, entity_type="document",
+          entity_id=doc.id, details={"sender": sender})
 
 
 @router.post("/{doc_id}/reprocess", response_model=DocumentDetailOut)

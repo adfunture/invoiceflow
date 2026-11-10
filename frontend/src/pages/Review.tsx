@@ -60,6 +60,17 @@ function ReviewDocuments({ docs }: { docs: DocumentItem[] }) {
       void qc.invalidateQueries({ queryKey: ["summary"] });
     },
   });
+  // Neu erkennen: z. B. nachdem KI-Schlüssel oder OCR eingerichtet wurden. Die Belege verlassen die Liste,
+  // bis der Processing-Worker sie neu bewertet hat.
+  const reprocess = useMutation({
+    mutationFn: () => post<{ queued: number[]; failed: { document_id: number; error: string }[] }>(
+      "/api/documents/bulk-reprocess", { document_ids: ids }),
+    onSuccess: (result) => {
+      setSelected(new Set(result.failed.map((f) => f.document_id)));
+      void qc.invalidateQueries({ queryKey: ["documents"] });
+      void qc.invalidateQueries({ queryKey: ["summary"] });
+    },
+  });
   const toggle = (id: number) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -74,9 +85,21 @@ function ReviewDocuments({ docs }: { docs: DocumentItem[] }) {
         <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
           <span className="text-slate-600">{ids.length} ausgewählt</span>
           <Button disabled={ids.length === 0} onClick={() => { mutation.reset(); setOpen(true); }}>Ignorieren</Button>
+          <Button disabled={ids.length === 0 || reprocess.isPending} onClick={() => reprocess.mutate()}
+            title="Erkennung erneut ausführen (Regeln, OCR, KI-Fallback)">Neu erkennen</Button>
           {ids.length > 0 && <button className="text-slate-500 hover:underline" onClick={() => setSelected(new Set())}>Auswahl aufheben</button>}
         </div>
       )}
+      {reprocess.data && (
+        <div className="mb-3">
+          <Notice tone={reprocess.data.failed.length ? "warning" : "info"}>
+            {reprocess.data.queued.length} Beleg(e) werden neu erkannt
+            {reprocess.data.failed.length > 0 && <>, {reprocess.data.failed.length} nicht möglich:{" "}
+              {reprocess.data.failed.map((f) => `#${f.document_id} (${f.error})`).join(", ")}</>}
+          </Notice>
+        </div>
+      )}
+      <ErrorBox error={reprocess.error} />
       <DocumentTable docs={docs} selection={canReview ? { selected, toggle, toggleAll } : undefined} />
       <Modal open={open} title={`${ids.length} Dokument(e) ignorieren`} onClose={() => setOpen(false)} footer={<>
         <Button onClick={() => setOpen(false)}>Abbrechen</Button>
@@ -102,10 +125,11 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const ids = messages.map((m) => m.id).filter((id) => selected.has(id));
-  // Absender blockieren: künftige Mails werden nicht mehr importiert, offene dieser Absender werden erledigt.
+  // Absenderregeln: "block" = nichts mehr importieren, "attachment_only" = nur noch Mails mit Anhang.
+  type SenderMode = "block" | "attachment_only";
   const block = useMutation({
-    mutationFn: (messageIds: number[]) =>
-      post<{ blocked: string[]; resolved: number[] }>("/api/email-messages/block-senders", { message_ids: messageIds }),
+    mutationFn: ({ messageIds, mode }: { messageIds: number[]; mode: SenderMode }) =>
+      post<{ blocked: string[]; resolved: number[] }>("/api/email-messages/block-senders", { message_ids: messageIds, mode }),
     onSuccess: () => {
       setSelected(new Set());
       void qc.invalidateQueries({ queryKey: ["messages"] });
@@ -113,14 +137,19 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
       void qc.invalidateQueries({ queryKey: ["settings"] });
     },
   });
-  const confirmBlock = (messageIds: number[]) => {
+  const confirmBlock = (messageIds: number[], mode: SenderMode) => {
     const senders = [...new Set(messages.filter((m) => messageIds.includes(m.id) && m.from_address)
       .map((m) => m.from_address!.toLowerCase()))];
     if (senders.length === 0) return;
-    const text = "Diese Absender blockieren? Ihre Mails werden künftig nicht mehr importiert (alle Postfächer):\n\n"
-      + senders.join("\n") + "\n\nAufheben unter Einstellungen → Blockierte Absender.";
+    const list = senders.join("\n");
+    const text = mode === "block"
+      ? "Diese Absender blockieren? Ihre Mails werden künftig gar nicht mehr importiert – auch nicht mit "
+        + `PDF-Rechnung (alle Postfächer):\n\n${list}\n\nAufheben unter Einstellungen → Blockierte Absender.`
+      : "Von diesen Absendern nur noch Mails mit Anhang importieren? Benachrichtigungen ohne Anhang werden "
+        + `übersprungen, PDF-Rechnungen kommen weiter an (alle Postfächer):\n\n${list}\n\n`
+        + "Aufheben unter Einstellungen → Absender nur mit Anhang.";
     if (!window.confirm(text)) return;
-    block.mutate(messageIds);
+    block.mutate({ messageIds, mode });
   };
 
   // Ein Klick genügt: "Erledigt" schließt die E-Mail ab, der Vermerk wird automatisch protokolliert.
@@ -153,11 +182,16 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
           <Button disabled={ids.length === 0 || mutation.isPending} onClick={() => mutation.mutate(ids)}>
             {ids.length > 0 ? `${ids.length} erledigt` : "Erledigt"}
           </Button>
-          {isAdmin && (
-            <Button disabled={ids.length === 0 || block.isPending} onClick={() => confirmBlock(ids)}>
+          {isAdmin && <>
+            <Button disabled={ids.length === 0 || block.isPending} onClick={() => confirmBlock(ids, "attachment_only")}
+              title="Benachrichtigungen ohne Anhang dieser Absender künftig überspringen">
+              Nur mit Anhang
+            </Button>
+            <Button disabled={ids.length === 0 || block.isPending} onClick={() => confirmBlock(ids, "block")}
+              title="Mails dieser Absender künftig gar nicht mehr importieren">
               Absender blockieren
             </Button>
-          )}
+          </>}
         </div>
       )}
       <ErrorBox error={mutation.error} />
@@ -175,7 +209,8 @@ function ReviewMessages({ messages }: { messages: EmailMessageItem[] }) {
                 </div>
                 <div className="flex gap-2">
                   {isAdmin && m.from_address && (
-                    <Button variant="ghost" disabled={block.isPending} onClick={() => confirmBlock([m.id])}>Blockieren</Button>
+                    <Button variant="ghost" disabled={block.isPending} onClick={() => confirmBlock([m.id], "attachment_only")}
+                      title="Benachrichtigungen ohne Anhang dieses Absenders künftig überspringen">Nur mit Anhang</Button>
                   )}
                   {canReview && <Button disabled={mutation.isPending} onClick={() => mutation.mutate([m.id])}>Erledigt</Button>}
                 </div>

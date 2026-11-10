@@ -107,6 +107,16 @@ SETTINGS: dict[str, SettingSpec] = {
         "Blockierte Absender (Adresse oder Domain, für alle Postfächer): Mails von ihnen werden beim Abruf "
         "übersprungen – weder gespeichert noch angezeigt. Einträge entstehen über „Absender blockieren“ in der Prüfung.",
     ),
+    "mail.attachment_only_senders": SettingSpec(
+        [], _sender_list,
+        "Absender, von denen nur Mails mit Anhang importiert werden (Adresse oder Domain, für alle Postfächer): "
+        "Benachrichtigungen ohne Anhang werden übersprungen, PDF-Rechnungen kommen weiterhin an.",
+    ),
+    "recognition.invoice_senders": SettingSpec(
+        [], _sender_list,
+        "Absender, deren unklare Belege als Rechnung gelten (z. B. englische Receipts von SaaS-Anbietern). "
+        "Alle übrigen Prüfungen (Pflichtangaben, Dubletten, Empfänger) gelten weiter. Einträge entstehen beim Freigeben.",
+    ),
     "attachments.max_size_mb": SettingSpec(25, _int_range(1, 100), "Maximale Größe je Anhang."),
     "imap.max_message_size_mb": SettingSpec(
         50, _int_range(1, 200), "Größere Nachrichten werden nicht heruntergeladen, sondern zur Prüfung markiert."

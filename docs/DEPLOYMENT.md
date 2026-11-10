@@ -48,6 +48,12 @@ Variablen:
 | `STORAGE_BACKEND` | `s3` |
 | `S3_*` | Zugangsdaten des Buckets (Abschnitt 5) |
 | `INVOICEFLOW_SECRET_IMAP_*` | Postfach-Passwörter (siehe `.env.example`) |
+| `ANTHROPIC_API_KEY` | `${{shared.ANTHROPIC_API_KEY}}` – nur `web` und `worker-processing` (setzt die IaC) |
+
+Wichtig: Die Shared Variable `ANTHROPIC_API_KEY` **vor** `railway config apply` im Projekt anlegen
+(Project Settings → Shared Variables), sonst zeigt die Referenz ins Leere. Ob der Schlüssel im
+Processing-Worker ankommt, zeigt das Dashboard (Hintergrunddienste → „KI-Schlüssel“); `ops-monitor`
+warnt, wenn der KI-Fallback eingeschaltet ist, der Schlüssel aber fehlt.
 
 Tipp: Gemeinsame Werte (`DOCUMENT_ENCRYPTION_KEY`, `S3_*`,
 `INVOICEFLOW_SECRET_*`) als **Shared Variables** im Projekt anlegen und in

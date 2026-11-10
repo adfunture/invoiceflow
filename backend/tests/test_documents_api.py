@@ -188,3 +188,36 @@ def test_reprocess_refuses_decided_documents_and_foreign_companies(admin, accoun
     sbc = ApiClient()
     sbc.login("pruefer2@sbc-symbio.de")
     assert sbc.post(f"/api/documents/{doc.id}/reprocess").status_code == 404
+
+
+def test_bulk_reprocess_reports_not_allowed(admin, accounts):
+    from .test_pipeline import UNCLEAR, pdf_att
+
+    docs = _setup(accounts, pdf_att(UNCLEAR, "a.pdf"), ("b.pdf", make_pdf(invoice_lines("RE-88")), PDF))
+    review = next(d for d, _ in docs if d.status == "manual_review")
+    ready = next(d for d, _ in docs if d.status == "ready_for_datev")
+    body = admin.post("/api/documents/bulk-reprocess", json={"document_ids": [review.id, ready.id, 999_999]}).json()
+    assert body["queued"] == [review.id]
+    assert {f["document_id"] for f in body["failed"]} == {ready.id, 999_999}
+    assert admin.get(f"/api/documents/{review.id}").json()["status"] == "pending"
+
+
+def test_approve_can_remember_sender_as_invoice_sender(admin, accounts):
+    """Gelernte Absenderregel: der nächste unklare Beleg desselben Absenders wird als Rechnung eingestuft."""
+    from .test_pipeline import deliver, pdf_att, process
+
+    receipt = ["Lieferant Beispiel GmbH", "Adfunture Outdoor GmbH", "Receipt", "Rechnungsnummer: R-1",
+               "Datum: 09.11.2026", "Gesamtbetrag 119,00 EUR", "USt-IdNr.: DE123456789"]
+    (doc, _), = _setup(accounts, pdf_att(receipt))
+    assert doc.status == "manual_review" and doc.document_type == "unclear"
+    body = admin.post(f"/api/documents/{doc.id}/review",
+                      json={"decision": "approve", "reason": "Manuell geprüft", "remember_sender": True}).json()
+    assert body["status"] == "ready_for_datev"
+    settings = {s["key"]: s["value"] for s in admin.get("/api/settings").json()}
+    assert settings["recognition.invoice_senders"] == ["buchhaltung@lieferant.example"]
+
+    deliver(accounts, [pdf_att([*receipt[:3], "Rechnungsnummer: R-2", *receipt[4:]], "r2.pdf")], subject="Receipt 2")
+    process(accounts)
+    second = [d for d, _ in documents() if d.id != doc.id][0]
+    assert second.document_type == "invoice"
+    assert second.status == "ready_for_datev", second.review_reason

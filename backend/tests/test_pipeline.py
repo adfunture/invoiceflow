@@ -451,3 +451,16 @@ def test_17_two_workers_same_invoice_concurrently(accounts):
         t.join()
     statuses = sorted(d.status.value for d, _ in documents())
     assert statuses == ["duplicate", "ready_for_datev"]
+
+
+def test_attachment_only_sender_skips_notifications_but_keeps_invoices(accounts):
+    with get_sessionmaker()() as s:
+        app_settings.set_setting(s, "mail.attachment_only_senders", ["paypal.de"])
+        s.commit()
+    body = "Zahlungsbeleg: https://www.paypal.com/unifiedtransactions/details/payment/X"
+    deliver(accounts, [], subject="Zahlungseingang", body=body, sender="service@paypal.de")
+    deliver(accounts, [pdf_att(invoice_lines("PP-9"))], subject="Gebührenrechnung", sender="service@paypal.de")
+    process(accounts)
+    msgs = messages()
+    assert [m.subject for m in msgs] == ["Gebührenrechnung"]
+    assert documents()[0][0].status == DocumentStatus.ready_for_datev

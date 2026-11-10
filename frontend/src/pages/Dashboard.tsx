@@ -78,9 +78,13 @@ export function DashboardPage() {
               <ul className="divide-y divide-slate-100 text-sm">
                 {workers.data!.map((w) => (
                   <li key={w.worker_id} className="flex flex-wrap justify-between gap-2 py-1.5">
-                    <span className="font-medium">{w.worker_type}</span>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium">{w.worker_type}</span>
+                      <WorkerEnv env={w.details.env as WorkerEnvInfo | undefined} type={w.worker_type} />
+                    </span>
                     <span className={w.stale ? "text-rose-700" : "text-slate-500"}>
-                      {w.stale ? "keine Rückmeldung seit " : "aktiv · "}{fmtDateTime(w.last_beat_at)}
+                      {w.stale ? "keine Rückmeldung seit " : `aktiv seit ${fmtDateTime(w.started_at)} · `}
+                      {w.stale && fmtDateTime(w.last_beat_at)}
                     </span>
                   </li>
                 ))}
@@ -89,6 +93,31 @@ export function DashboardPage() {
           </Card>
         </div>
       )}
+    </>
+  );
+}
+
+interface WorkerEnvInfo {
+  ai_key?: boolean;
+  tesseract?: boolean;
+  pg_dump?: string | null;
+  commit?: string | null;
+}
+
+/** Fähigkeiten eines Workers: zeigt auf einen Blick, ob KI-Schlüssel oder OCR fehlen. */
+function WorkerEnv({ env, type }: { env?: WorkerEnvInfo; type: string }) {
+  if (!env) return null;
+  const chip = (ok: boolean, label: string, title: string) => (
+    <span key={label} title={title}
+      className={`rounded px-1.5 py-0.5 text-xs ring-1 ring-inset ${ok ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-amber-50 text-amber-800 ring-amber-200"}`}>
+      {ok ? "✓" : "✗"} {label}
+    </span>
+  );
+  return (
+    <>
+      {type === "processing" && chip(!!env.ai_key, "KI-Schlüssel", "ANTHROPIC_API_KEY in diesem Worker gesetzt?")}
+      {type === "processing" && chip(!!env.tesseract, "OCR", "Tesseract installiert?")}
+      {env.commit && <span className="text-xs text-slate-400" title="Deployter Stand">{env.commit}</span>}
     </>
   );
 }
