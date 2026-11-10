@@ -24,6 +24,7 @@ dependencies = [
     "pypdf>=5.1",
     "defusedxml>=0.7.1",
     "anthropic>=2.0",
+    "httpx>=0.28",  # Abruf von Rechnungslinks (mail/link_fetch.py)
 ]
 
 [project.optional-dependencies]
