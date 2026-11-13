@@ -19,7 +19,7 @@ from invoiceflow.recognition.model import (
 )
 from invoiceflow.recognition.pdf import PdfError, analyze_pdf
 from invoiceflow.recognition.recipient import CompanyNames, recipient_mismatch
-from invoiceflow.recognition.text_rules import classify, extract_fields, own_vat_as_sender
+from invoiceflow.recognition.text_rules import classify, extract_fields, non_booking_hint, own_vat_as_sender
 
 from .samples import cii_xml, invoice_lines, make_pdf, ubl_xml, with_embedded_xml
 
@@ -334,3 +334,21 @@ def test_own_vat_below_customer_label_in_table_is_not_outgoing_invoice():
     swapped = [(x, y, {"DE261579742": "DE133540644", "DE133540644": "DE261579742"}.get(t, t)) for x, y, t in _THULE]
     text = analyze_pdf(make_pdf([], positioned=swapped)).text
     assert own_vat_as_sender(text, ["DE261579742"], ADF) == "DE261579742"
+
+
+_THULE_AB = [(x, y, "AUFTRAGSBESTÄTIGUNG" if t == "RECHNUNG" else t) for x, y, t in _THULE] + [
+    (40, 520, "Auftragsnummer"), (40, 508, "3201320707"), (40, 480, "Gesamtbetrag 423,50 EUR"),
+]
+
+
+def test_thule_order_confirmation_with_title_beside_letterhead_is_not_invoice():
+    """Thule: Firmenname und Titel stehen in einer Zeile ("Thule GmbH AUFTRAGSBESTÄTIGUNG")."""
+    text = analyze_pdf(make_pdf([], positioned=_THULE_AB)).text
+    assert classify(text)[0] == DocumentType.order_confirmation
+    assert non_booking_hint(text)
+    assert classify(analyze_pdf(make_pdf([], positioned=_THULE)).text)[0] == DocumentType.invoice
+
+
+@pytest.mark.parametrize("line", ["gemäß Auftragsbestätigung Nr. 123", "Bezug zu Lieferschein 4711", "Wir danken für Ihre Auftragsbestätigung"])
+def test_references_beside_text_are_not_titles(line):
+    assert classify(f"Rechnung RE-1\n{line}\nGesamtbetrag 100,00 EUR")[0] == DocumentType.invoice

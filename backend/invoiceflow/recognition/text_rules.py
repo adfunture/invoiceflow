@@ -42,6 +42,19 @@ _TITLE_KEYWORDS: dict[DocumentType, str] = {
 _TITLE_PATTERNS: dict[DocumentType, re.Pattern[str]] = {
     t: re.compile(r"^\s*(?:" + kw + r")\b" + _TITLE_SUFFIX, re.I) for t, kw in _TITLE_KEYWORDS.items()
 }
+# Briefköpfe mit Firmenname und Titel in einer Zeile ("Thule GmbH AUFTRAGSBESTÄTIGUNG"):
+# Schlüsselwort am Zeilenende (optional mit Belegnummer), nur im Kopfbereich gewertet.
+# Verweise ("gemäß Auftragsbestätigung Nr. 1", "zu Rechnung RE-1") zählen nicht.
+_REFERENCE_WORDS = (r"gemäß|gemaess|laut|lt\.?|zu|zur|zum|siehe|aus|auf|bezug|ihre[rnm]?|unsere[rnm]?|"
+                    r"der|die|des|dem|den|vom|per|to|see|your|our|re")
+_TRAILING_TITLE_PATTERNS: dict[DocumentType, re.Pattern[str]] = {
+    t: re.compile(r"^(?!.*\b(?:" + _REFERENCE_WORDS + r")\s+(?:" + kw + r")\b).+?\s(?:" + kw + r")\b" + _TITLE_SUFFIX, re.I)
+    for t, kw in _TITLE_KEYWORDS.items()
+}
+# Rechnungs-Absender (z. B. Thule) schicken auch Auftragsbestätigungen/Lieferscheine.
+_NON_BOOKING_HINT = re.compile(
+    r"\b(?:" + _TITLE_KEYWORDS[DocumentType.order_confirmation] + "|" + _TITLE_KEYWORDS[DocumentType.delivery_note] + r")\b",
+    re.I)
 # Mahnungen nennen die gemahnte Rechnung oft in der Überschrift ("Mahnung zu Rechnung RE-1").
 _DUNNING_ANYWHERE = re.compile(r"^\s*(?:\d\.\s*)?(?:mahnung|zahlungserinnerung|payment\s+reminder)\b", re.I | re.M)
 _CORRECTION = re.compile(r"\b(rechnungskorrektur|korrekturrechnung|korrigierte\s+rechnung|corrected\s+invoice)\b", re.I)
@@ -119,7 +132,7 @@ def classify(text: str) -> tuple[DocumentType, Decimal, bool]:
     for i, line in enumerate(lines):
         weight = 3 if i < HEADER_LINES else 1
         for doc_type, pattern in _TITLE_PATTERNS.items():
-            if pattern.search(line):
+            if pattern.search(line) or (i < HEADER_LINES and _TRAILING_TITLE_PATTERNS[doc_type].search(line)):
                 scores[doc_type] += weight
     if _NUMBER_LABEL.search(text):
         scores[DocumentType.invoice] += 2
@@ -146,6 +159,12 @@ def classify(text: str) -> tuple[DocumentType, Decimal, bool]:
         return DocumentType.unclear, Decimal("0.400"), is_correction
     confidence = Decimal("0.950") if not second else Decimal("0.800")
     return top, confidence, is_correction
+
+
+def non_booking_hint(text: str) -> bool:
+    """Kopfbereich nennt Auftragsbestätigung/Lieferschein – dann keine Absenderregel „unklar → Rechnung“."""
+    header = "\n".join([ln for ln in text.splitlines() if ln.strip()][:HEADER_LINES])
+    return bool(_NON_BOOKING_HINT.search(header))
 
 
 def _first_amount(pattern: re.Pattern[str], text: str, *, last: bool = False) -> Decimal | None:

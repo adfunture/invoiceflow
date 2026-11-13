@@ -62,7 +62,7 @@ from invoiceflow.recognition.model import (
 from invoiceflow.recognition.ocr import OcrProvider, OcrUnavailable, get_ocr
 from invoiceflow.recognition.pdf import PdfError, analyze_pdf
 from invoiceflow.recognition.recipient import CompanyNames, recipient_mismatch
-from invoiceflow.recognition.text_rules import classify, extract_fields, own_vat_as_sender
+from invoiceflow.recognition.text_rules import classify, extract_fields, non_booking_hint, own_vat_as_sender
 from invoiceflow.services import app_settings
 from invoiceflow.storage import DocumentStore, IntegrityError as StorageIntegrityError
 
@@ -264,7 +264,9 @@ class DocumentProcessor:
         analysis = self._analyze(data, mime, ctx, ocr_provider)
         inv = analysis.invoice
         if inv is not None and invoice_sender and inv.document_type == DocumentType.unclear:
-            if sender_verified:
+            if non_booking_hint(analysis.text):
+                inv.warnings.append("Absenderregel nicht angewendet: Kopfbereich nennt Auftragsbestätigung/Lieferschein")
+            elif sender_verified:
                 # Absenderregel (beim Freigeben gelernt): unklare Belege dieses Absenders sind Rechnungen.
                 inv.document_type = DocumentType.invoice
                 inv.warnings.append("Dokumentart über Absenderregel als Rechnung erkannt")
